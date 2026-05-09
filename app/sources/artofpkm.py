@@ -22,6 +22,12 @@ LISTING_RE = re.compile(
     re.DOTALL,
 )
 
+NEXT_BATCH_RE = re.compile(
+    r'<turbo-frame[^>]*id="card_batch_\d+"[^>]*src="([^"]+)"'
+)
+
+MAX_BATCHES = 30
+
 CARD_NUMBER_RE = re.compile(r'\b([A-Z0-9]{1,4}\s*/\s*[A-Z0-9]{1,4})\b')
 JP_CHAR_RE = re.compile(r'[぀-ゟ゠-ヿ一-鿿　-〿]')
 
@@ -60,6 +66,39 @@ class ArtofpkmSource(SecondarySource):
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_SLEEP)
         return None
+
+    def _collect_all_listing_html(self, art_set_id: int) -> str:
+        """抓主 listing 頁 + 所有 lazy-loaded turbo-frame batches，串起整段 HTML。
+
+        artofpkm 用 Rails Turbo Frame，主頁只渲染前 100 張，剩下藏在
+        <turbo-frame id="card_batch_N" src="/sets/{id}/card_batches?offset=N">
+        裡的 lazy-load fragment。沿著 next-frame 連結爬到底為止。
+        """
+        first_url = f"{BASE}/sets/{art_set_id}/cards"
+        first_html = self._fetch(first_url)
+        if first_html is None:
+            raise RuntimeError(f"failed to fetch listing: {first_url}")
+
+        chunks = [first_html]
+        next_match = NEXT_BATCH_RE.search(first_html)
+        batch_count = 0
+        while next_match:
+            if batch_count >= MAX_BATCHES:
+                raise RuntimeError(
+                    f"artofpkm listing for set {art_set_id} exceeded {MAX_BATCHES} batches "
+                    f"({MAX_BATCHES * 100} cards). Either set is unexpectedly large or "
+                    f"turbo-frame next-link detection is broken. "
+                    f"Bump MAX_BATCHES if set is genuinely larger."
+                )
+            time.sleep(SLEEP_SEC)
+            next_url = f"{BASE}{next_match.group(1)}"
+            fragment = self._fetch(next_url)
+            if fragment is None:
+                raise RuntimeError(f"failed to fetch listing batch: {next_url}")
+            chunks.append(fragment)
+            batch_count += 1
+            next_match = NEXT_BATCH_RE.search(fragment)
+        return "".join(chunks)
 
     def _parse_listing(self, html: str, art_set_id: int) -> list[int]:
         seqs: set[int] = set()
@@ -108,10 +147,7 @@ class ArtofpkmSource(SecondarySource):
         except ValueError:
             raise ValueError(f"artofpkm source_set_id must be numeric, got: {source_set_id!r}")
 
-        listing_url = f"{BASE}/sets/{art_id}/cards"
-        listing_html = self._fetch(listing_url)
-        if listing_html is None:
-            raise RuntimeError(f"failed to fetch listing: {listing_url}")
+        listing_html = self._collect_all_listing_html(art_id)
         time.sleep(SLEEP_SEC)
 
         seqs = self._parse_listing(listing_html, art_id)
