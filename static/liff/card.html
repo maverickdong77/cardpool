@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cardpool | 價格分析</title>
+    <link rel="stylesheet" href="/static/liff/style.css">
+    <link rel="stylesheet" href="/static/liff/card.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
+    <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <style>
+        .source-section {
+            background: #fff;
+            border-radius: 12px;
+            margin: 12px 0;
+            padding: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .source-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        .source-logo {
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .source-logo.snkrdunk { background: #FF6B00; color: white; }
+        .source-logo.ebay { background: #0064D2; color: white; }
+        .source-stats {
+            display: flex;
+            gap: 8px;
+            margin-left: auto;
+            font-size: 12px;
+            color: #666;
+        }
+        .price-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #f5f5f5;
+        }
+        .price-row:last-child { border-bottom: none; }
+        .price-label { color: #666; font-size: 13px; }
+        .price-value { font-weight: bold; color: #333; }
+        .price-value.latest { color: #1DB446; font-size: 18px; }
+        .price-value.high { color: #E53935; }
+        .price-value.low { color: #1976D2; }
+        .record-list { margin-top: 12px; }
+        .record-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 13px;
+        }
+        .record-item:last-child { border-bottom: none; }
+        .record-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-right: 12px;
+        }
+        .record-price {
+            font-weight: bold;
+            color: #1DB446;
+            white-space: nowrap;
+        }
+        .record-date { color: #999; font-size: 11px; margin-left: 8px; }
+        .no-data { text-align: center; color: #999; padding: 20px; }
+        /* 股票風格圖表 ============================== */
+        .chart-stock { background: #fafbfc; border: 1px solid #eef0f2; }
+        .chart-toolbar {
+            display: flex; align-items: baseline; gap: 10px;
+            border-bottom: 1px solid #eef0f2;
+            padding-bottom: 10px; margin-bottom: 10px;
+        }
+        .chart-title { font-size: 13px; color: #666; font-weight: 600; }
+        .chart-current-price {
+            font-size: 22px; font-weight: 700;
+            color: #1a1a1a; letter-spacing: -0.3px;
+            font-variant-numeric: tabular-nums;
+        }
+        .chart-change {
+            font-size: 12px; font-weight: 600;
+            padding: 2px 7px; border-radius: 4px;
+            font-variant-numeric: tabular-nums;
+        }
+        .chart-change.up   { background: #fee2e2; color: #c62828; }
+        .chart-change.down { background: #d1fae5; color: #047857; }
+        .chart-change.flat { background: #f1f5f9; color: #64748b; }
+
+        .chart-controls {
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 10px; flex-wrap: wrap; margin-bottom: 8px;
+        }
+        .chart-type-tabs {
+            display: inline-flex; background: #f1f3f5;
+            border-radius: 6px; padding: 2px; gap: 0;
+        }
+        .ctype-tab {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 5px 10px; border: none; background: transparent;
+            color: #666; font-size: 12px; cursor: pointer;
+            border-radius: 4px; font-weight: 500;
+            transition: background .15s, color .15s;
+        }
+        .ctype-tab:hover:not(.active) { color: #333; }
+        .ctype-tab.active {
+            background: #fff; color: #1a1a1a; font-weight: 600;
+            box-shadow: 0 1px 2px rgba(0,0,0,.06);
+        }
+
+        .chart-range-tabs {
+            display: inline-flex; gap: 0;
+            background: #f1f3f5; border-radius: 6px; padding: 2px;
+        }
+        .range-tab {
+            padding: 5px 10px; border: none; background: transparent;
+            border-radius: 4px; font-size: 11px; color: #666;
+            font-weight: 500; cursor: pointer; min-width: 32px;
+            transition: background .15s, color .15s;
+        }
+        .range-tab:hover:not(.active) { color: #333; }
+        .range-tab.active {
+            background: #fff; color: #1a1a1a; font-weight: 700;
+            box-shadow: 0 1px 2px rgba(0,0,0,.06);
+        }
+
+        .chart-legend {
+            display: flex; gap: 12px; flex-wrap: wrap;
+            padding: 8px 4px 0; font-size: 11px; color: #555;
+        }
+        .chart-legend .lg-item { display: inline-flex; align-items: center; gap: 4px; }
+        .chart-legend .lg-dot {
+            width: 10px; height: 10px; border-radius: 2px; display: inline-block;
+        }
+        .period-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+        .period-stats .stat {
+            background: #f8f8f8;
+            border-radius: 6px;
+            padding: 8px 4px;
+            text-align: center;
+        }
+        .period-stats .stat .label {
+            display: block;
+            font-size: 10px;
+            color: #999;
+            margin-bottom: 2px;
+        }
+        .period-stats .stat .value {
+            display: block;
+            font-size: 12px;
+            font-weight: 700;
+            color: #333;
+        }
+        .period-stats .stat .value.high { color: #E53935; }
+        .period-stats .stat .value.low { color: #1976D2; }
+        .period-stats .stat .value.avg { color: #1DB446; }
+        .lang-badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-right: 6px;
+        }
+        .lang-badge.jp { background: #FFE0E0; color: #C62828; }
+        .lang-badge.en { background: #E0EBFF; color: #1565C0; }
+        .lang-note {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+        .compare-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 8px;
+        }
+        .compare-block {
+            border: 1px solid #eee;
+            border-radius: 8px;
+            padding: 10px;
+            text-align: center;
+        }
+        .compare-block .lbl { font-size: 11px; color: #999; margin-bottom: 4px; }
+        .compare-block .val { font-size: 16px; font-weight: 700; color: #1DB446; }
+        .compare-block.jp { background: #fff8f8; }
+        .compare-block.en { background: #f8faff; }
+        .compare-block.clickable {
+            cursor: pointer;
+            transition: transform 0.1s, box-shadow 0.1s;
+        }
+        .compare-block.clickable:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+        }
+        .compare-block .link-hint {
+            display: block;
+            font-size: 10px;
+            color: #888;
+            margin-top: 4px;
+        }
+        .flag-btn {
+            background: none;
+            border: 1px solid #f5c6c6;
+            color: #c04848;
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-left: 4px;
+            white-space: nowrap;
+        }
+        .flag-btn:hover { background: #fdebeb; }
+        .sync-prompt {
+            background: #fffaf0;
+            border: 1px solid #ffd591;
+            border-radius: 12px;
+            padding: 16px;
+            margin: 12px 0;
+            text-align: center;
+        }
+        .sync-prompt.cold {
+            background: #f5f5f5;
+            border-color: #d9d9d9;
+        }
+        .sync-prompt .sp-icon {
+            font-size: 24px;
+            margin-bottom: 6px;
+        }
+        .sync-prompt .sp-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        .sync-prompt .sp-desc {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+        .sync-btn {
+            background: #FFD700;
+            color: #333;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.15s;
+        }
+        .sync-btn:hover { transform: translateY(-1px); }
+        .sync-btn:disabled {
+            background: #e0e0e0;
+            color: #999;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .sync-prompt .sp-meta {
+            display: block;
+            font-size: 11px;
+            color: #999;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="app card-page">
+        <!-- Header -->
+        <header class="header">
+            <button id="backBtn" class="back-btn">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 12H5M12 19l-7-7 7-7"/>
+                </svg>
+            </button>
+            <h1>價格分析</h1>
+            <a href="/" class="home-btn" title="回首頁">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2h-4v-7H10v7H6a2 2 0 0 1-2-2V9z"/></svg>
+                首頁
+            </a>
+        </header>
+
+        <!-- 載入中 -->
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>載入中...</p>
+        </div>
+
+        <!-- 卡片內容 -->
+        <div id="cardContent" class="card-content hidden">
+            <!-- 卡片資訊 -->
+            <section class="card-info-section">
+                <div class="card-image-wrapper">
+                    <img id="cardImage" src="" alt="Card">
+                </div>
+                <div class="card-details">
+                    <h2 id="cardTitle"></h2>
+                    <p id="cardSubtitle" class="card-subtitle"></p>
+                    <div class="psa-stats">
+                        <span class="psa-badge">PSA 10</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 即時查詢區塊（僅在無 PSA10 紀錄時顯示） -->
+            <section class="sync-prompt hidden" id="syncPrompt">
+                <div class="sp-icon" id="syncPromptIcon">🔍</div>
+                <div class="sp-title" id="syncPromptTitle">尚未掃描過此卡</div>
+                <div class="sp-desc" id="syncPromptDesc">點擊下方按鈕立即從 SNKRDUNK 與 eBay 抓取最新成交紀錄。</div>
+                <button class="sync-btn" id="syncBtn">⚡ 立即查詢</button>
+                <span class="sp-meta hidden" id="syncPromptMeta"></span>
+            </section>
+
+            <!-- 跨版本快速比較（僅在同時有日/英資料時顯示）-->
+            <section class="source-section hidden" id="compareSection">
+                <div class="source-header">
+                    <span>📊 日版 vs 英版價格比較（PSA 10 平均）</span>
+                </div>
+                <div class="compare-section">
+                    <div class="compare-block jp">
+                        <div class="lbl"><span class="lang-badge jp">日版</span>近期均價</div>
+                        <div class="val" id="cmpJpAvg">-</div>
+                    </div>
+                    <div class="compare-block en">
+                        <div class="lbl"><span class="lang-badge en">英版</span>近期均價</div>
+                        <div class="val" id="cmpEnAvg">-</div>
+                    </div>
+                </div>
+                <p class="lang-note" id="cmpDiffNote"></p>
+            </section>
+
+            <!-- SNKRDUNK 區塊（日版） -->
+            <section class="source-section" id="snkrdunkSection">
+                <div class="source-header">
+                    <span class="source-logo snkrdunk">SNKRDUNK</span>
+                    <span class="lang-badge jp">日版</span>
+                    <span class="source-stats">PSA 10 近期成交紀錄</span>
+                </div>
+                <div class="price-row">
+                    <span class="price-label">最新</span>
+                    <span class="price-value latest" id="snkrLatest">-</span>
+                </div>
+                <div class="price-row">
+                    <span class="price-label">最高</span>
+                    <span class="price-value high" id="snkrHigh">-</span>
+                </div>
+                <div class="price-row">
+                    <span class="price-label">最低</span>
+                    <span class="price-value low" id="snkrLow">-</span>
+                </div>
+                <div class="record-list" id="snkrRecords"></div>
+            </section>
+
+            <!-- eBay 區塊 -->
+            <section class="source-section" id="ebaySection">
+                <div class="source-header">
+                    <span class="source-logo ebay">eBay</span>
+                    <span class="lang-badge" id="ebayLangBadge">-</span>
+                    <span class="source-stats">PSA 10 近期成交紀錄</span>
+                </div>
+                <div class="price-row">
+                    <span class="price-label">最新</span>
+                    <span class="price-value latest" id="ebayLatest">-</span>
+                </div>
+                <div class="price-row">
+                    <span class="price-label">最高</span>
+                    <span class="price-value high" id="ebayHigh">-</span>
+                </div>
+                <div class="price-row">
+                    <span class="price-label">最低</span>
+                    <span class="price-value low" id="ebayLow">-</span>
+                </div>
+                <div class="record-list" id="ebayRecords"></div>
+            </section>
+
+            <!-- 價格走勢圖（股票風格）-->
+            <section class="source-section chart-stock">
+                <div class="source-header chart-toolbar">
+                    <span class="chart-title">價格走勢</span>
+                    <span id="chartCurrentPrice" class="chart-current-price"></span>
+                    <span id="chartChange" class="chart-change"></span>
+                </div>
+
+                <div class="period-stats" id="periodStats"></div>
+
+                <div class="chart-controls">
+                    <div class="chart-type-tabs" id="chartTypeTabs">
+                        <button class="ctype-tab active" data-type="line" title="折線圖">
+                            <svg viewBox="0 0 16 16" width="14" height="14"><polyline points="1,12 5,7 9,9 15,3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+                            折線
+                        </button>
+                        <button class="ctype-tab" data-type="candle" title="K 線圖">
+                            <svg viewBox="0 0 16 16" width="14" height="14"><line x1="4" y1="2" x2="4" y2="14" stroke="currentColor" stroke-width="1"/><rect x="2" y="5" width="4" height="6" fill="currentColor"/><line x1="11" y1="3" x2="11" y2="13" stroke="currentColor" stroke-width="1"/><rect x="9" y="6" width="4" height="5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+                            K 線
+                        </button>
+                        <button class="ctype-tab" data-type="bar" title="長條圖">
+                            <svg viewBox="0 0 16 16" width="14" height="14"><rect x="1" y="9" width="3" height="6" fill="currentColor"/><rect x="6" y="5" width="3" height="10" fill="currentColor"/><rect x="11" y="2" width="3" height="13" fill="currentColor"/></svg>
+                            長條
+                        </button>
+                    </div>
+                    <div class="chart-range-tabs" id="chartRangeTabs">
+                        <button class="range-tab" data-range="7">7D</button>
+                        <button class="range-tab active" data-range="30">1M</button>
+                        <button class="range-tab" data-range="90">3M</button>
+                        <button class="range-tab" data-range="180">6M</button>
+                        <button class="range-tab" data-range="all">全部</button>
+                    </div>
+                </div>
+
+                <div class="chart-container" style="height: 320px;">
+                    <canvas id="priceChart"></canvas>
+                </div>
+                <div class="chart-legend" id="chartLegend"></div>
+            </section>
+        </div>
+    </div>
+
+    <script src="/static/liff/card.js?v=10"></script>
+</body>
+</html>

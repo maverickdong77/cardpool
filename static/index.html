@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cardpool Price Searching</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Hero Section */
+        .hero {
+            text-align: center;
+            padding: 60px 20px;
+            color: white;
+        }
+
+        .hero h1 {
+            font-size: 3rem;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .hero p {
+            font-size: 1.3rem;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+
+        .hero-badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            margin-bottom: 30px;
+        }
+
+        /* Search Box */
+        .search-box {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 600px;
+            margin: 0 auto 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+
+        .search-box h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .search-input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .search-input {
+            flex: 1;
+            padding: 15px 20px;
+            font-size: 1rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            transition: border-color 0.3s;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .search-btn {
+            padding: 15px 30px;
+            font-size: 1rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .search-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .search-hint {
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        /* Results */
+        .results {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            max-width: 600px;
+            margin: 0 auto 40px;
+            display: none;
+        }
+
+        .results.show {
+            display: block;
+        }
+
+        .results h3 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .price-card {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+        }
+
+        .price-card h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .price-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .price-item:last-child {
+            border-bottom: none;
+        }
+
+        .price-value {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .price-twd {
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        /* Features */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            padding: 40px 0;
+        }
+
+        .feature-card {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            text-align: center;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+
+        .feature-icon {
+            font-size: 3rem;
+            margin-bottom: 20px;
+        }
+
+        .feature-card h3 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .feature-card p {
+            color: #666;
+            line-height: 1.6;
+        }
+
+        /* LINE CTA */
+        .line-cta {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .line-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: #06C755;
+            color: white;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            border-radius: 50px;
+            text-decoration: none;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .line-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(6, 199, 85, 0.4);
+        }
+
+        .line-btn svg {
+            width: 24px;
+            height: 24px;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 40px 20px;
+            color: rgba(255,255,255,0.7);
+        }
+
+        footer a {
+            color: white;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2rem;
+            }
+
+            .search-input-group {
+                flex-direction: column;
+            }
+
+            .search-btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Hero -->
+        <section class="hero">
+            <div class="hero-badge">PSA Card Price Search</div>
+            <h1>Cardpool</h1>
+            <p>即時查詢 eBay、SNKRDUNK 成交價格<br>掌握 Pokemon 鑑定卡市場行情</p>
+        </section>
+
+        <!-- Search Box -->
+        <section class="search-box">
+            <h2>查詢價格</h2>
+            <div class="search-input-group">
+                <input type="text" class="search-input" id="searchInput"
+                       placeholder="輸入 PSA 編號或卡片名稱...">
+                <button class="search-btn" onclick="search()">查詢</button>
+            </div>
+            <p class="search-hint">例如：12345678 或 Pikachu VMAX</p>
+        </section>
+
+        <!-- Results -->
+        <section class="results" id="results">
+            <h3>查詢結果：<span id="queryText"></span></h3>
+
+            <div class="price-card">
+                <h4>eBay 成交價</h4>
+                <div id="ebayPrices">
+                    <p class="loading">載入中...</p>
+                </div>
+            </div>
+
+            <div class="price-card">
+                <h4>SNKRDUNK 價格</h4>
+                <div id="snkrdunkPrices">
+                    <p class="loading">載入中...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Features -->
+        <section class="features">
+            <div class="feature-card">
+                <div class="feature-icon">🔍</div>
+                <h3>即時查價</h3>
+                <p>支援 PSA 編號與卡片名稱搜尋，即時取得最新成交價格</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">💰</div>
+                <h3>多平台比價</h3>
+                <p>同時查詢 eBay 與 SNKRDUNK，輕鬆比較國際市場行情</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📱</div>
+                <h3>LINE 機器人</h3>
+                <p>加入好友即可查詢，免下載 APP，隨時隨地掌握價格</p>
+            </div>
+        </section>
+
+        <!-- LINE CTA -->
+        <section class="line-cta">
+            <p style="color: white; margin-bottom: 20px; font-size: 1.1rem;">
+                加入 LINE 官方帳號，查價更方便！
+            </p>
+            <a href="#" class="line-btn" id="lineBtn">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63h2.386c.346 0 .627.285.627.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63.346 0 .628.285.628.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.282.629-.629.629M24 10.314C24 4.943 18.615.572 12 .572S0 4.943 0 10.314c0 4.811 4.27 8.842 10.035 9.608.391.082.923.258 1.058.59.12.301.079.766.038 1.08l-.164 1.02c-.045.301-.24 1.186 1.049.645 1.291-.539 6.916-4.078 9.436-6.975C23.176 14.393 24 12.458 24 10.314"/>
+                </svg>
+                加入好友
+            </a>
+        </section>
+    </div>
+
+    <footer>
+        <p>資料來源：eBay、SNKRDUNK | 價格僅供參考</p>
+    </footer>
+
+    <script>
+        const searchInput = document.getElementById('searchInput');
+        const results = document.getElementById('results');
+        const queryText = document.getElementById('queryText');
+        const ebayPrices = document.getElementById('ebayPrices');
+        const snkrdunkPrices = document.getElementById('snkrdunkPrices');
+
+        // Enter 鍵搜尋
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') search();
+        });
+
+        async function search() {
+            const query = searchInput.value.trim();
+            if (!query) return;
+
+            // 顯示結果區塊
+            results.classList.add('show');
+            queryText.textContent = query;
+
+            // 顯示載入中
+            ebayPrices.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            snkrdunkPrices.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+            // 判斷是 PSA 編號還是名稱
+            const isPsaCert = /^\d{7,10}$/.test(query);
+            const endpoint = isPsaCert
+                ? `/api/search/psa/${query}`
+                : `/api/search/name/${encodeURIComponent(query)}`;
+
+            try {
+                const response = await fetch(endpoint);
+                const data = await response.json();
+
+                // 顯示 eBay 價格
+                if (data.ebay && data.ebay.length > 0) {
+                    ebayPrices.innerHTML = data.ebay.slice(0, 5).map(item => `
+                        <div class="price-item">
+                            <span>${truncate(item.listing_title, 30)}</span>
+                            <span>
+                                <span class="price-value">US$${item.price_usd.toLocaleString()}</span>
+                                <span class="price-twd">(NT$${item.price_twd.toLocaleString()})</span>
+                            </span>
+                        </div>
+                    `).join('');
+                } else {
+                    ebayPrices.innerHTML = '<p style="color: #888;">無資料</p>';
+                }
+
+                // 顯示 SNKRDUNK 價格
+                if (data.snkrdunk && data.snkrdunk.length > 0) {
+                    snkrdunkPrices.innerHTML = data.snkrdunk.slice(0, 5).map(item => `
+                        <div class="price-item">
+                            <span>${truncate(item.listing_title, 30)}</span>
+                            <span>
+                                <span class="price-value">¥${item.price_jpy.toLocaleString()}</span>
+                                <span class="price-twd">(NT$${item.price_twd.toLocaleString()})</span>
+                            </span>
+                        </div>
+                    `).join('');
+                } else {
+                    snkrdunkPrices.innerHTML = '<p style="color: #888;">無資料</p>';
+                }
+
+            } catch (error) {
+                console.error('搜尋失敗:', error);
+                ebayPrices.innerHTML = '<p style="color: #e74c3c;">查詢失敗，請稍後再試</p>';
+                snkrdunkPrices.innerHTML = '<p style="color: #e74c3c;">查詢失敗，請稍後再試</p>';
+            }
+        }
+
+        function truncate(str, len) {
+            if (!str) return '';
+            return str.length > len ? str.substring(0, len) + '...' : str;
+        }
+    </script>
+</body>
+</html>

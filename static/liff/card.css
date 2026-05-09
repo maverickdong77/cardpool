@@ -1,0 +1,286 @@
+/* Card Detail Page Styles */
+
+.card-page .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+}
+
+.card-page .header h1 {
+    font-size: 1.1rem;
+}
+
+.back-btn {
+    background: none;
+    border: none;
+    padding: 8px;
+    cursor: pointer;
+    color: #333;
+}
+
+.header-spacer {
+    width: 40px;
+}
+
+.card-content {
+    padding-bottom: 100px;
+}
+
+/* Card Info Section */
+.card-info-section {
+    display: flex;
+    gap: 16px;
+    padding: 20px 16px;
+    background: #fff;
+    border-bottom: 1px solid #eee;
+}
+
+.card-image-wrapper {
+    flex-shrink: 0;
+}
+
+.card-image-wrapper img {
+    width: 100px;
+    height: auto;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.card-details {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.card-details h2 {
+    font-size: 1rem;
+    color: #333;
+    margin-bottom: 4px;
+    line-height: 1.4;
+}
+
+.card-subtitle {
+    font-size: 0.8rem;
+    color: #999;
+    margin-bottom: 12px;
+}
+
+.psa-stats {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.psa-badge {
+    background: #FFD700;
+    color: #333;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.psa-count {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+/* Price Summary */
+.price-summary {
+    padding: 16px;
+    background: #fff;
+    margin-top: 8px;
+}
+
+.summary-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 0.9rem;
+    color: #333;
+    font-weight: 600;
+}
+
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+}
+
+.summary-card {
+    background: #f8f8f8;
+    border-radius: 8px;
+    padding: 12px 8px;
+    text-align: center;
+}
+
+.summary-card .label {
+    display: block;
+    font-size: 0.7rem;
+    color: #999;
+    margin-bottom: 4px;
+}
+
+.summary-card .value {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #333;
+}
+
+.summary-card .value.high {
+    color: #e74c3c;
+}
+
+.summary-card .value.low {
+    color: #27ae60;
+}
+
+/* Chart Section */
+.chart-section {
+    padding: 16px;
+    background: #fff;
+    margin-top: 8px;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.section-header h3 {
+    font-size: 1rem;
+    color: #333;
+}
+
+.chart-tabs {
+    display: flex;
+    gap: 4px;
+}
+
+.chart-tab {
+    padding: 6px 12px;
+    border: none;
+    background: #f0f0f0;
+    border-radius: 16px;
+    font-size: 0.75rem;
+    color: #666;
+    cursor: pointer;
+}
+
+.chart-tab.active {
+    background: #FFD700;
+    color: #333;
+    font-weight: 600;
+}
+
+.chart-container {
+    height: 200px;
+    position: relative;
+}
+
+/* Records Section */
+.records-section {
+    padding: 16px;
+    background: #fff;
+    margin-top: 8px;
+}
+
+.records-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.record-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    background: #f8f8f8;
+    border-radius: 8px;
+}
+
+.record-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.record-source {
+    font-size: 0.75rem;
+    color: #999;
+}
+
+.record-title {
+    font-size: 0.85rem;
+    color: #333;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.psa-tag {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #d32f2f;
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    margin-right: 6px;
+    flex-shrink: 0;
+}
+
+.record-date {
+    font-size: 0.7rem;
+    color: #bbb;
+}
+
+.record-price {
+    text-align: right;
+}
+
+.record-price .twd {
+    display: block;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #1DB446;
+}
+
+.record-price .usd {
+    font-size: 0.75rem;
+    color: #999;
+}
+
+/* Action Section */
+.action-section {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    gap: 12px;
+    padding: 16px;
+    background: #fff;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+.action-section .action-btn {
+    flex: 1;
+}
+
+/* No Data */
+.no-data {
+    text-align: center;
+    padding: 40px 20px;
+    color: #999;
+}

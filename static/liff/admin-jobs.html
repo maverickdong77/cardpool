@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>排程任務即時控制 - Cardpool</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft JhengHei", "Noto Sans TC", -apple-system, sans-serif;
+    background: #0e1116; color: #e6e6e6; margin: 0; padding: 24px;
+    min-height: 100vh;
+  }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .subtitle { color: #8a93a3; margin-bottom: 18px; font-size: 13px; }
+  .panel {
+    background: #161b22; border: 1px solid #2a313a; border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 16px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; }
+  .stat {
+    flex: 1 1 180px; background: #1c232d; border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .stat .label { color: #8a93a3; font-size: 11px; }
+  .stat .value { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .stat .small { font-size: 11px; color: #8a93a3; }
+  .bar {
+    height: 6px; background: #2a313a; border-radius: 3px; margin-top: 6px;
+    overflow: hidden;
+  }
+  .bar > div {
+    height: 100%;
+    background: linear-gradient(90deg, #3fb950 0%, #f0883e 70%, #f85149 100%);
+    transition: width .3s;
+  }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td {
+    padding: 10px 12px; text-align: left;
+    border-bottom: 1px solid #2a313a; font-size: 14px;
+  }
+  th { color: #8a93a3; font-weight: 500; font-size: 12px; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 12px;
+    font-size: 12px; font-weight: 600;
+  }
+  .badge.running { background: #1f3d2a; color: #5fde88; }
+  .badge.paused { background: #3d3119; color: #ffcc66; }
+  .badge.stopped, .badge.idle { background: #2a313a; color: #8a93a3; }
+  .badge.stopping { background: #3d2519; color: #ff9966; }
+  .badge.disabled { background: #2a313a; color: #6a7280; }
+  .badge.finished { background: #1f3d2a; color: #9fdcaf; }
+  .badge.error    { background: #5a2024; color: #f88; }
+
+  button {
+    background: #2a313a; color: #e6e6e6; border: 1px solid #3a4350;
+    padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    font-size: 12px; margin-right: 4px;
+    transition: all .15s;
+  }
+  button:hover:not(:disabled) { background: #3a4350; }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.pause { border-color: #b08d3a; color: #ffcc66; }
+  button.resume { border-color: #2e7d3e; color: #5fde88; }
+  button.stop { border-color: #a44; color: #f88; }
+  button.start { border-color: #2e7d3e; color: #5fde88; }
+  button.danger { background: #5a2024; border-color: #a44; color: #fff; }
+  button.danger:hover { background: #7a2a30; }
+
+  .activity { color: #b0b8c4; font-size: 13px; }
+  .activity .small { font-size: 11px; color: #6a7280; }
+  .stats-pill {
+    display: inline-block; padding: 1px 8px; background: #1c232d;
+    border-radius: 10px; font-size: 11px; color: #8a93a3; margin-right: 4px;
+  }
+
+  .progress-cell { min-width: 220px; }
+  .progress-bar {
+    width: 100%; height: 14px; background: #2a313a; border-radius: 7px;
+    overflow: hidden; position: relative;
+  }
+  .progress-bar > div {
+    height: 100%;
+    background: linear-gradient(90deg, #2e7d3e 0%, #3fb950 100%);
+    transition: width .4s ease;
+  }
+  .progress-bar.done > div {
+    background: linear-gradient(90deg, #1f6f3a 0%, #2e7d3e 100%);
+  }
+  .progress-meta {
+    display: flex; justify-content: space-between; font-size: 11px;
+    color: #8a93a3; margin-top: 4px;
+  }
+  .progress-meta .pct { color: #5fde88; font-weight: 600; }
+  .eta-cell { min-width: 120px; }
+  .eta-big { font-size: 16px; font-weight: 600; color: #e6e6e6; }
+  .eta-rate { font-size: 11px; color: #8a93a3; margin-top: 2px; }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .pill {
+    background: #1c232d; padding: 4px 10px; border-radius: 12px;
+    font-size: 11px; color: #8a93a3;
+  }
+  .err { color: #f88; font-size: 11px; margin-top: 4px; }
+  .toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: #1c232d; border: 1px solid #2a313a; padding: 10px 16px;
+    border-radius: 8px; font-size: 13px; opacity: 0;
+    transition: opacity .3s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  .toast.err { border-color: #a44; color: #f88; }
+  .toast.ok { border-color: #2e7d3e; color: #5fde88; }
+</style>
+</head>
+<body>
+  <h1>排程任務即時控制</h1>
+  <div class="subtitle">每 2 秒自動刷新；可暫停 / 停止 / 重啟個別任務以釋放記憶體。</div>
+
+  <div class="panel">
+    <div class="toolbar">
+      <span class="pill" id="server-time">載入中…</span>
+      <span class="pill" id="psutil-status">memory: …</span>
+      <button class="danger" onclick="closeBrowsers()">🧹 立即關閉所有 Chromium</button>
+      <button onclick="refreshNow()">手動刷新</button>
+      <label style="margin-left:auto;font-size:12px;color:#8a93a3;">
+        <input type="checkbox" id="auto-refresh" checked> 自動刷新（2s）
+      </label>
+    </div>
+    <div class="row" id="memory-cards">
+      <!-- memory cards injected -->
+    </div>
+  </div>
+
+  <div class="panel">
+    <table id="jobs-table">
+      <thead>
+        <tr>
+          <th>任務名稱</th>
+          <th>狀態</th>
+          <th>進度</th>
+          <th>預計完成</th>
+          <th>目前活動</th>
+          <th>最後更新</th>
+          <th style="min-width:280px;">操作</th>
+        </tr>
+      </thead>
+      <tbody id="jobs-body">
+        <tr><td colspan="7" style="text-align:center;color:#8a93a3;">載入中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+const STATUS_LABELS = {
+  running: '執行中',
+  paused: '已暫停',
+  stopping: '停止中',
+  stopped: '已停止',
+  idle: '待啟動',
+  disabled: '已停用',
+  finished: '已完成',
+  error: '錯誤',
+};
+
+let timer = null;
+
+function showToast(msg, kind='ok') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + kind;
+  setTimeout(() => t.className = 'toast ' + kind, 2000);
+}
+
+async function api(path, method='GET') {
+  const r = await fetch(path, { method });
+  if (!r.ok) throw new Error(`${method} ${path} -> ${r.status}`);
+  return await r.json();
+}
+
+function renderMemory(mem) {
+  const wrap = document.getElementById('memory-cards');
+  if (mem.error) {
+    document.getElementById('psutil-status').textContent = mem.error;
+    wrap.innerHTML = '<div class="stat"><div class="label">記憶體資訊</div><div class="value" style="font-size:13px;color:#f88">' + mem.error + '</div></div>';
+    return;
+  }
+  const sys = mem.system || {};
+  const proc = mem.process || {};
+  document.getElementById('psutil-status').textContent =
+    `本機 ${sys.used_mb}/${sys.total_mb} MB (${sys.percent}%)`;
+  wrap.innerHTML = `
+    <div class="stat">
+      <div class="label">系統記憶體</div>
+      <div class="value">${sys.percent}%</div>
+      <div class="small">${sys.used_mb} / ${sys.total_mb} MB（剩 ${sys.available_mb} MB）</div>
+      <div class="bar"><div style="width:${sys.percent}%"></div></div>
+    </div>
+    <div class="stat">
+      <div class="label">查價伺服器（含子行程）</div>
+      <div class="value">${proc.total_mb} MB</div>
+      <div class="small">主行程 ${proc.rss_mb} MB / 子 ${proc.children_count} 個 = ${proc.children_rss_mb} MB</div>
+    </div>
+    <div class="stat">
+      <div class="label">Chromium worker</div>
+      <div class="value">${proc.chromium_count} 個 / ${proc.chromium_rss_mb} MB</div>
+      <div class="small">每個 worker 約 200~300 MB</div>
+    </div>
+    <div class="stat">
+      <div class="label">PID</div>
+      <div class="value" style="font-size:14px;">${proc.pid}</div>
+      <div class="small">主行程編號</div>
+    </div>`;
+}
+
+function fmtStats(j) {
+  const s = j.stats || {};
+  const parts = [];
+  if (s.mode) parts.push(`<span class="stats-pill">mode: ${s.mode}</span>`);
+  if (s.last_batch) {
+    const b = s.last_batch;
+    if (b.cards != null) parts.push(`<span class="stats-pill">cards: ${b.cards}</span>`);
+    if (b.checked != null) parts.push(`<span class="stats-pill">checked: ${b.checked}</span>`);
+    if (b.ebay_new != null) parts.push(`<span class="stats-pill">ebay+${b.ebay_new}</span>`);
+    if (b.snkr_new != null) parts.push(`<span class="stats-pill">snkr+${b.snkr_new}</span>`);
+    if (b.access_denied != null && b.access_denied > 0) parts.push(`<span class="stats-pill" style="color:#f88">denied: ${b.access_denied}</span>`);
+  }
+  if (s.last_round) {
+    const r = s.last_round;
+    parts.push(`<span class="stats-pill">round: cards=${r.cards} ebay+${r.ebay_new} snkr+${r.snkr_new}</span>`);
+  }
+  return parts.join('');
+}
+
+function fmtTime(ts) {
+  if (!ts) return '-';
+  const dt = new Date(ts * 1000);
+  const sec = Math.round((Date.now() - dt.getTime()) / 1000);
+  let ago;
+  if (sec < 60) ago = `${sec}s 前`;
+  else if (sec < 3600) ago = `${Math.round(sec/60)}m 前`;
+  else ago = `${Math.round(sec/3600)}h 前`;
+  return `${dt.toLocaleTimeString()}<br><span class="small" style="color:#6a7280">${ago}</span>`;
+}
+
+function renderProgress(p) {
+  if (!p) return '<span style="color:#6a7280">—</span>';
+  if (p.error) return `<span class="err">⚠ ${p.error}</span>`;
+  const total = p.total || 0;
+  const done = p.done || 0;
+  const pct = Math.min(100, p.percent || 0);
+  const isDone = pct >= 100;
+  const extra = p.extra ? `<span style="color:#ffcc66;">${p.extra}</span>` : '';
+  return `
+    <div class="progress-cell">
+      <div style="font-size:11px;color:#8a93a3;margin-bottom:4px;">${p.label || ''}</div>
+      <div class="progress-bar ${isDone ? 'done' : ''}"><div style="width:${pct}%"></div></div>
+      <div class="progress-meta">
+        <span>${done.toLocaleString()} / ${total.toLocaleString()}（剩 ${(p.remaining||0).toLocaleString()}）</span>
+        <span class="pct">${pct}%</span>
+      </div>
+      ${extra ? `<div style="font-size:11px;margin-top:3px;">${extra}</div>` : ''}
+    </div>`;
+}
+
+function renderEta(p) {
+  if (!p || p.error) return '<span style="color:#6a7280">—</span>';
+  const big = p.eta_label || '—';
+  const srcLabel = p.rate_source === 'batch'
+    ? '<span style="color:#5fde88">即時 batch</span>'
+    : (p.rate_source === 'db' ? '<span style="color:#ffcc66">近期 DB 均值</span>' : '');
+  const rate = p.rate_per_min != null
+    ? `<div class="eta-rate">${p.rate_per_min}/分鐘 ${srcLabel}</div>`
+    : '';
+  return `<div class="eta-cell"><div class="eta-big">${big}</div>${rate}</div>`;
+}
+
+function renderJobs(list) {
+  const tbody = document.getElementById('jobs-body');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#8a93a3;">沒有註冊的任務</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map(j => {
+    const lbl = STATUS_LABELS[j.status] || j.status;
+    const canPause = j.is_running && !j.is_paused && j.status !== 'stopping';
+    const canResume = j.is_running && j.is_paused;
+    const canStop = j.is_running;
+    const canStart = !j.is_running;
+    return `
+      <tr>
+        <td><strong>${j.label}</strong><br><span class="small" style="color:#6a7280">${j.name}</span></td>
+        <td><span class="badge ${j.status}">${lbl}</span><br><span class="small" style="color:#6a7280">批次數 ${j.batches_done}</span></td>
+        <td>${renderProgress(j.progress)}</td>
+        <td>${renderEta(j.progress)}</td>
+        <td>
+          <div class="activity">${j.activity || '-'}</div>
+          <div>${fmtStats(j)}</div>
+          ${j.error ? `<div class="err">⚠ ${j.error}</div>` : ''}
+        </td>
+        <td style="font-size:12px;">${fmtTime(j.last_update)}</td>
+        <td>
+          <button class="pause"  ${canPause  ? '' : 'disabled'} onclick="act('${j.name}','pause')">⏸ 暫停</button>
+          <button class="resume" ${canResume ? '' : 'disabled'} onclick="act('${j.name}','resume')">▶ 恢復</button>
+          <button class="stop"   ${canStop   ? '' : 'disabled'} onclick="act('${j.name}','stop')">⏹ 停止</button>
+          <button class="start"  ${canStart  ? '' : 'disabled'} onclick="act('${j.name}','start')">⟳ 啟動</button>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+async function refreshNow() {
+  try {
+    const data = await api('/api/admin/jobs');
+    document.getElementById('server-time').textContent = '伺服器時間 ' + data.server_time;
+    renderMemory(data.memory);
+    renderJobs(data.jobs);
+  } catch (e) {
+    showToast('刷新失敗：' + e.message, 'err');
+  }
+}
+
+async function act(name, action) {
+  try {
+    const r = await api(`/api/admin/jobs/${name}/${action}`, 'POST');
+    showToast(`${name}: ${action} ${r.ok ? '成功' : '無變化'}`, r.ok ? 'ok' : 'err');
+    await refreshNow();
+  } catch (e) {
+    showToast(`${action} 失敗：` + e.message, 'err');
+  }
+}
+
+async function closeBrowsers() {
+  if (!confirm('要關閉所有 Chromium worker 釋放記憶體嗎？\n下次 sync 時會自動重開。')) return;
+  try {
+    const r = await api('/api/admin/jobs/close-browsers', 'POST');
+    showToast(`已關閉 ${r.browsers_closed} 個 chromium`, 'ok');
+    await refreshNow();
+  } catch (e) {
+    showToast('關閉失敗：' + e.message, 'err');
+  }
+}
+
+function startTimer() {
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => {
+    if (document.getElementById('auto-refresh').checked) refreshNow();
+  }, 2000);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  refreshNow();
+  startTimer();
+});
+</script>
+</body>
+</html>

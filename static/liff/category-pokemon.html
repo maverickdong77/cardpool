@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cardpool | 寶可夢分類</title>
+    <link rel="stylesheet" href="/static/liff/style.css">
+    <style>
+        body { background: #f6f7f9; }
+        .header {
+            position: sticky; top: 0; z-index: 10;
+            background: #fff; padding: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+        .header h1 { margin: 0 0 8px 0; font-size: 18px; }
+        .search-bar {
+            width: 100%; padding: 10px 12px;
+            border: 1px solid #ddd; border-radius: 8px;
+            font-size: 14px; box-sizing: border-box;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 8px; padding: 12px;
+        }
+        .card-item {
+            background: #fff; border-radius: 12px;
+            padding: 12px 8px; text-align: center;
+            cursor: pointer; transition: transform 0.15s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .card-item:hover { transform: translateY(-2px); box-shadow: 0 3px 8px rgba(0,0,0,0.1); }
+        .card-item img {
+            width: 80px; height: 80px;
+            object-fit: contain;
+            display: block; margin: 0 auto 4px;
+            background: #f8f8f8; border-radius: 50%;
+        }
+        .card-item .id {
+            font-size: 11px; color: #999;
+        }
+        .card-item .en {
+            font-weight: 600; font-size: 14px; margin: 4px 0 2px;
+        }
+        .card-item .jp {
+            font-size: 12px; color: #666;
+        }
+        .empty { color:#888; padding: 24px; text-align: center; }
+        .nav-back {
+            display: inline-block; padding: 6px 12px;
+            color: #555; font-size: 13px; text-decoration: none;
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a class="nav-back" href="/" style="background:#FFD700;color:#333;font-weight:600;">🏠 回首頁</a>
+        <h1>寶可夢分類 <span id="count" style="font-weight:normal;color:#888;font-size:13px"></span></h1>
+        <input id="search" class="search-bar" placeholder="輸入名字（中/英/日）或編號搜尋..." />
+    </div>
+    <div id="grid" class="grid"></div>
+    <div id="empty" class="empty" style="display:none">沒有符合的結果</div>
+
+<script>
+let allItems = [];
+
+async function load() {
+    const res = await fetch('/api/category/pokemon/list');
+    allItems = await res.json();
+    document.getElementById('count').textContent = `共 ${allItems.length} 隻`;
+    render(allItems);
+}
+
+function render(items) {
+    const grid = document.getElementById('grid');
+    grid.innerHTML = items.map(p => `
+        <div class="card-item" onclick="goCards(${p.id})">
+            <img src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${p.id}.png"
+                 loading="lazy"
+                 onerror="this.src='https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${p.id}.png';this.onerror=null">
+            <div class="id">#${String(p.id).padStart(3,'0')}</div>
+            <div class="en">${p.name_en || ''}</div>
+            <div class="jp">${p.name_jp || ''}</div>
+        </div>
+    `).join('');
+    document.getElementById('empty').style.display = items.length ? 'none' : 'block';
+}
+
+function goCards(id) {
+    location.href = `/category/pokemon/${id}`;
+}
+
+document.getElementById('search').addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { render(allItems); return; }
+    const filtered = allItems.filter(p =>
+        (p.name_en || '').toLowerCase().includes(q) ||
+        (p.name_jp || '').toLowerCase().includes(q) ||
+        String(p.id).includes(q)
+    );
+    render(filtered);
+});
+
+load();
+</script>
+</body>
+</html>

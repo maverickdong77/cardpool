@@ -1,0 +1,90 @@
+# === 資料庫 ===
+cards.db
+cards.db-shm
+cards.db-wal
+cards.db-journal
+cards.db.backup-*
+*.sqlite
+*.sqlite3
+
+# === Python 暫存 ===
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+Python/
+
+# === 編輯器 / OS ===
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.claude/
+
+# === 環境變數 ===
+.env
+.env.local
+
+# === Log / PID / 執行紀錄 ===
+*.log
+*.err
+*.pid
+
+# === 暫存與 debug 檔 ===
+tmp_*
+tmp_ocr/
+dbg*.png
+*_debug.html
+*_debug.txt
+debug_*.py
+crop_*.png
+test_*.png
+pokecard_test.png
+
+# === HTML dump / scrape 暫存產物 ===
+_goldengem_*.html
+_psa_cert.html
+artofpkm_*.html
+artofpkm_chars.json
+pokellector_sets.html
+psa_*.html
+psa_*_dump.html
+snkr_*.html
+snkr_*.txt
+snkr_*.xml
+zh_*.html
+
+# === 一次性實驗 / probe / backfill / fix scripts ===
+# 這些是已經跑過或拋棄的腳本，不進 repo
+_inspect_state.py
+apply_artofpkm.py
+apply_tcg_gallery.py
+backfill_*.py
+build_*.py
+build_*.log
+cleanup_old_cache.py
+debug_*.py
+fetch_*.py
+fill_zh_*.py
+fix_*.py
+inspect_*.py
+linebot_test.*
+lt2.*
+match_artofpkm.py
+patch_artofpkm_missing.py
+probe_*.py
+promote_*.py
+refresh_*.py
+scrape_*.py
+sync_*.py
+test_*.py
+translate_*.py
+
+# === 啟動 / 部署相關（視情況可拿掉註解） ===
+# Procfile
+# nixpacks.toml
+# runtime.txt
+# start_server.py
+# run_api.py
+# run_artofpkm_chain.sh

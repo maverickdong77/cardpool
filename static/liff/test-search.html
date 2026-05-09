@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>搜尋測試</title>
+    <link rel="stylesheet" href="/static/liff/style.css">
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <h1>搜尋測試</h1>
+        </header>
+
+        <div class="search-section">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="輸入卡片名稱" value="pikachu">
+                <button id="searchBtn" class="search-btn">搜尋</button>
+            </div>
+        </div>
+
+        <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <p>搜尋中...</p>
+        </div>
+
+        <div id="cardGrid" class="card-grid"></div>
+
+        <div id="emptyState" class="empty-state">
+            <p>輸入關鍵字搜尋卡片</p>
+            <p class="hint">例如：pikachu</p>
+        </div>
+
+        <div id="cardModal" class="modal hidden">
+            <div class="modal-overlay"></div>
+            <div class="modal-content">
+                <button class="modal-close">&times;</button>
+                <div class="modal-card">
+                    <img id="modalImage" src="" alt="Card">
+                    <div class="modal-info">
+                        <h3 id="modalTitle"></h3>
+                        <p id="modalSubtitle" class="modal-subtitle"></p>
+                        <p id="modalPrice" class="modal-price"></p>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button id="viewDataBtn" class="action-btn primary">查看數據</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let selectedCard = null;
+
+        const searchInput = document.getElementById('searchInput');
+        const searchBtn = document.getElementById('searchBtn');
+        const cardGrid = document.getElementById('cardGrid');
+        const loading = document.getElementById('loading');
+        const emptyState = document.getElementById('emptyState');
+        const cardModal = document.getElementById('cardModal');
+
+        // 綁定事件
+        searchBtn.addEventListener('click', handleSearch);
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleSearch();
+        });
+        document.querySelector('.modal-close').addEventListener('click', closeModal);
+        document.querySelector('.modal-overlay').addEventListener('click', closeModal);
+        document.getElementById('viewDataBtn').addEventListener('click', handleViewData);
+
+        async function handleSearch() {
+            const query = searchInput.value.trim();
+            if (!query) return;
+
+            loading.classList.remove('hidden');
+            cardGrid.classList.add('hidden');
+            emptyState.classList.add('hidden');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/pokemon/search/${encodeURIComponent(query)}`, {
+                    headers: { 'ngrok-skip-browser-warning': '1' }
+                });
+                const data = await response.json();
+
+                loading.classList.add('hidden');
+
+                if (data.results && data.results.length > 0) {
+                    renderCards(data.results);
+                } else {
+                    emptyState.classList.remove('hidden');
+                    emptyState.querySelector('p').textContent = '找不到卡片';
+                }
+            } catch (error) {
+                loading.classList.add('hidden');
+                emptyState.classList.remove('hidden');
+                emptyState.querySelector('p').textContent = '錯誤: ' + error.message;
+            }
+        }
+
+        function renderCards(results) {
+            cardGrid.innerHTML = '';
+            cardGrid.classList.remove('hidden');
+
+            results.forEach((item) => {
+                const cardEl = document.createElement('div');
+                cardEl.className = 'card-item';
+                cardEl.innerHTML = `<img src="${item.image_url}" alt="${item.card?.name || ''}" onerror="this.src='https://via.placeholder.com/200x280?text=No+Image'">`;
+                cardEl.addEventListener('click', () => openModal(item));
+                cardGrid.appendChild(cardEl);
+            });
+        }
+
+        function openModal(item) {
+            selectedCard = item;
+            document.getElementById('modalImage').src = item.image_url;
+            document.getElementById('modalTitle').textContent = item.card?.name || '';
+            document.getElementById('modalSubtitle').textContent = item.card?.set_name || '';
+            document.getElementById('modalPrice').textContent = item.avg_price_twd ? `NT$ ${Math.round(item.avg_price_twd).toLocaleString()}` : '點擊查看數據';
+            cardModal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            cardModal.classList.add('hidden');
+        }
+
+        async function handleViewData() {
+            if (!selectedCard) return;
+            closeModal();
+
+            const card = selectedCard.card || {};
+            const cardName = card.name || '';
+            const setName = card.set_name || '';
+            const cardNumber = card.number || '';
+
+            // 用更精確的查詢：名稱 + 系列 + 編號
+            const searchQuery = `${cardName} ${setName} ${cardNumber}`.trim();
+
+            loading.classList.remove('hidden');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/search/name/${encodeURIComponent(searchQuery)}`, {
+                    headers: { 'ngrok-skip-browser-warning': '1' }
+                });
+                const data = await response.json();
+
+                localStorage.setItem('selectedCard', JSON.stringify({
+                    query: searchQuery,
+                    officialImage: selectedCard.image_url,
+                    officialName: cardName,
+                    officialSet: setName,
+                    cardNumber: cardNumber,
+                    results: data.ebay || [],
+                    snkrdunk: data.snkrdunk || []
+                }));
+
+                window.location.href = `/static/liff/card.html?q=${encodeURIComponent(searchQuery)}`;
+            } catch (error) {
+                loading.classList.add('hidden');
+                alert('錯誤: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

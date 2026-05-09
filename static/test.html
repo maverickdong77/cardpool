@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Test</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        input { padding: 10px; width: 200px; }
+        button { padding: 10px 20px; background: #FFD700; border: none; cursor: pointer; }
+        #result { margin-top: 20px; padding: 10px; background: #f0f0f0; white-space: pre-wrap; max-height: 400px; overflow: auto; }
+        #error { color: red; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>API Test</h1>
+    <input type="text" id="query" placeholder="輸入卡片名稱" value="pikachu">
+    <button onclick="testSearch()">搜尋</button>
+    <div id="error"></div>
+    <div id="result"></div>
+
+    <script>
+        async function testSearch() {
+            const query = document.getElementById('query').value;
+            const resultDiv = document.getElementById('result');
+            const errorDiv = document.getElementById('error');
+
+            resultDiv.textContent = '搜尋中...';
+            errorDiv.textContent = '';
+
+            try {
+                const url = `${window.location.origin}/api/pokemon/search/${encodeURIComponent(query)}`;
+                console.log('Fetching:', url);
+
+                const response = await fetch(url, {
+                    headers: { 'ngrok-skip-browser-warning': '1' }
+                });
+
+                console.log('Response status:', response.status);
+
+                const data = await response.json();
+                console.log('Data:', data);
+
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+
+                if (data.results && data.results.length > 0) {
+                    errorDiv.style.color = 'green';
+                    errorDiv.textContent = `成功！找到 ${data.results.length} 張卡片`;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                errorDiv.textContent = '錯誤: ' + error.message;
+                resultDiv.textContent = '';
+            }
+        }
+    </script>
+</body>
+</html>

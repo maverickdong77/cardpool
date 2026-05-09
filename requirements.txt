@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+line-bot-sdk
+httpx
+beautifulsoup4
+lxml
+python-dotenv
+aiosqlite
+apscheduler
+playwright
+psutil
