@@ -28,7 +28,7 @@ JP_CHAR_RE = re.compile(r'[぀-ゟ゠-ヿ一-鿿　-〿]')
 
 class ArtofpkmSource(SecondarySource):
     name = "artofpkm"
-    provided_fields = {"name_jp", "name_en"}
+    provided_fields = {"name_jp", "name"}
 
     def __init__(self):
         self._client: Optional[httpx.Client] = None
@@ -72,7 +72,7 @@ class ArtofpkmSource(SecondarySource):
 
     def _parse_card_page(self, html: str) -> dict:
         soup = BeautifulSoup(html, "lxml")
-        out = {"card_number": None, "name_jp": None, "name_en": None}
+        out = {"card_number": None, "name_jp": None, "name": None}
 
         # card_number: 優先 <title>，fallback 掃 h1/h2/h3
         if soup.title and soup.title.string:
@@ -80,7 +80,7 @@ class ArtofpkmSource(SecondarySource):
             if m:
                 out["card_number"] = m.group(1).replace(" ", "")
 
-        # name_en / name_jp from h1/h2/h3，順便 fallback 補 card_number
+        # name (英文) / name_jp from h1/h2/h3，順便 fallback 補 card_number
         for tag in soup.find_all(["h1", "h2", "h3"]):
             text = tag.get_text(strip=True)
             if not text:
@@ -93,9 +93,9 @@ class ArtofpkmSource(SecondarySource):
             if out["name_jp"] is None and JP_CHAR_RE.search(text):
                 out["name_jp"] = text
                 continue
-            if out["name_en"] is None and not JP_CHAR_RE.search(text) and any(c.isalpha() for c in text):
+            if out["name"] is None and not JP_CHAR_RE.search(text) and any(c.isalpha() for c in text):
                 if not CARD_NUMBER_RE.search(text):
-                    out["name_en"] = text
+                    out["name"] = text
         return out
 
     def fetch_set(
@@ -136,8 +136,8 @@ class ArtofpkmSource(SecondarySource):
             fields = {}
             if parsed["name_jp"]:
                 fields["name_jp"] = parsed["name_jp"]
-            if parsed["name_en"]:
-                fields["name_en"] = parsed["name_en"]
+            if parsed["name"]:
+                fields["name"] = parsed["name"]
             records.append(CardRecord(
                 card_number=parsed["card_number"],
                 fields=fields,

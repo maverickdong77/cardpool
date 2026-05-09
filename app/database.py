@@ -221,15 +221,26 @@ def init_db():
 
     # ========== Stage 1: secondary source 抽象層 ==========
     # card_field_sources：紀錄每張卡每個欄位的「目前最佳值」與來源。
-    # UNIQUE(card_id, field_name) — 一張卡同欄位只一筆當前值；source_name 紀錄來源。
+    # UNIQUE(card_id, field_name) — 一張卡同欄位只一筆當前值。
     # priority 邏輯由 application 層判斷（見 app/sources/priority.py），DB 不存。
-    # CHECK whitelist：未來加新值改這裡一次。
+    #
+    # Stage 3 一次性 schema rename：'name_en' → 'name'（card_list 從來只有 'name'
+    # 欄位，schema 對齊 reality）。偵測舊 'name_en' CHECK 才 drop，避免 init_db()
+    # 每次啟動都把已寫入的資料清掉。未來若有第二次 schema 改動需要走真 migration
+    # （INSERT INTO new SELECT FROM old → drop old → rename）。
+    cursor.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='card_field_sources'"
+    )
+    row = cursor.fetchone()
+    if row and "'name_en'" in row[0]:
+        cursor.execute("DROP TABLE card_field_sources")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS card_field_sources (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             card_id      INTEGER NOT NULL,
             field_name   TEXT    NOT NULL CHECK (field_name IN (
-                             'name_jp', 'name_en', 'name_zh', 'rarity', 'image_url'
+                             'name_jp', 'name', 'name_zh', 'rarity', 'image_url'
                          )),
             source_name  TEXT    NOT NULL CHECK (source_name IN (
                              'manual', 'artofpkm', 'pokellector', '_52poke', 'ocr'

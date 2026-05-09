@@ -5,6 +5,6 @@
 """
 FIELD_PRIORITY: dict[str, list[str]] = {
     'name_jp':   ['manual', 'artofpkm', 'pokellector'],
-    'name_en':   ['manual', 'artofpkm', 'pokellector'],
+    'name':      ['manual', 'artofpkm', 'pokellector'],
     'name_zh':   ['manual', '_52poke', 'pokellector'],
 }
