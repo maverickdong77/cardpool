@@ -6,6 +6,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -33,10 +34,16 @@ class SecondarySource(ABC):
     provided_fields: set[str]
 
     @abstractmethod
-    def fetch_set(self, source_set_id: str) -> list[CardRecord]:
+    def fetch_set(
+        self,
+        source_set_id: str,
+        max_cards: Optional[int] = None,
+    ) -> list[CardRecord]:
         """抓取單一 set 的所有 CardRecord。
 
         source_set_id: 該 source 自己的 set id（例：artofpkm 的 581）；
                        對映回我們 card_list.set_id 由 caller 處理。
+        max_cards: 採樣模式上限（preview / dry-run 用），None = 全抓。
+                   實作端可選擇截 listing 或截 detail，但回傳長度不得超過此值。
         """
         ...
