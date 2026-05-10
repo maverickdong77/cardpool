@@ -99,3 +99,7 @@ cards.db.recovered-*
 cards.db.broken
 _*.py
 _*.html
+_*.txt
+_*.jpg
+_*.json
+cards.db.before-*
