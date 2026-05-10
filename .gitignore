@@ -97,3 +97,5 @@ cards_clean.db
 cards.db.snapshot-*
 cards.db.recovered-*
 cards.db.broken
+_*.py
+_*.html
