@@ -88,3 +88,12 @@ translate_*.py
 # start_server.py
 # run_api.py
 # run_artofpkm_chain.sh
+# === Recovery / 救援工具與備份 ===
+sqlite3.exe
+sqlite-tools-*.zip
+recovered.sql
+cards_recovered.db
+cards_clean.db
+cards.db.snapshot-*
+cards.db.recovered-*
+cards.db.broken
