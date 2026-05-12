@@ -103,3 +103,8 @@ _*.txt
 _*.jpg
 _*.json
 cards.db.before-*
+_*.ps1
+_*.sql
+write_changelog.py
+write_next_day.py
+*.ps1
