@@ -476,156 +476,416 @@ async def save_card_to_list(set_id: str, card_data: dict):
         await db.commit()
 
 
+def _detect_lang_from_set_id(set_id: str) -> str:
+    """從 set_id 格式推斷語言：jp pg 是純數字（或 JP 官方 promo 代碼如 SV-P/M-P）、
+    en 是小寫 (base1)、tw 是大寫含 - (S8)。"""
+    s = (set_id or "").strip()
+    if s.isdigit():
+        return "jp"
+    # JP 官方 promo pg（pokemon-card.com 公式代碼）
+    if s in ("SV-P", "M-P", "S-P", "SM-P", "XY-P", "BW-P", "DP-P", "PCG-P"):
+        return "jp"
+    if s and s == s.upper():
+        return "tw"
+    return "en"
+
+
 async def get_all_card_sets(language: str = "jp") -> list:
-    """取得所有系列；release_date 缺值時 fallback 到 artofpkm_sets.release_date。"""
+    """從三語 set 表取得系列列表。回傳統一欄位：
+    set_id, name, name_jp, name_zh, logo_url, total_cards, release_date, language, source
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("""
-            SELECT cs.*,
-                   COALESCE(NULLIF(cs.release_date, ''), a.release_date) AS effective_release_date,
-                   a.release_date AS artofpkm_release_date,
-                   a.id AS artofpkm_id,
-                   a.display_order AS art_display_order,
-                   a.era AS art_era
-            FROM card_sets cs
-            LEFT JOIN artofpkm_set_match m ON m.our_set_id = cs.set_id
-            LEFT JOIN artofpkm_sets a ON a.id = m.art_id
-            WHERE cs.language = ?
-            ORDER BY cs.updated_at DESC
-        """, (language,))
-        rows = await cursor.fetchall()
-        result = []
-        for row in rows:
-            d = dict(row)
-            # 用 effective 覆蓋 release_date 給前端用
-            if d.get("effective_release_date"):
-                d["release_date"] = d["effective_release_date"]
-            # 把 artofpkm_id 重命名成統一欄位 (前端可用)
-            d["art_id"] = d.get("artofpkm_id")
-            d["display_order"] = d.get("art_display_order")
-            d["era"] = d.get("art_era")
-            result.append(d)
+        result: list = []
+
+        if language == "jp":
+            # era 來自 jp_set_era_map（規則推論、590 set 全有 era）
+            # logo/display_order 仍從 artofpkm 取（對得到的 42 個 set 才有）
+            cursor = await db.execute("""
+                SELECT CAST(j.pg AS TEXT) AS set_id,
+                       j.pg AS pg,
+                       j.name_jp,
+                       j.hit_cnt AS total_cards,
+                       j.logo_url AS jp_logo_url,
+                       j.release_date AS jp_release_date,
+                       em.era AS era,
+                       MIN(a.id) AS artofpkm_id,
+                       MIN(a.display_order) AS art_display_order,
+                       MIN(a.release_date) AS art_release_date,
+                       MIN(a.logo_url) AS art_logo_url
+                FROM jp_card_list_set j
+                LEFT JOIN jp_set_era_map em ON em.pg = j.pg
+                LEFT JOIN card_sets cs ON cs.name_jp = j.name_jp AND cs.language='jp'
+                LEFT JOIN artofpkm_set_match m ON m.our_set_id = cs.set_id
+                LEFT JOIN artofpkm_sets a ON a.id = m.art_id
+                WHERE (j.name_jp IS NOT NULL AND j.name_jp != '')
+                  AND j.name_jp NOT LIKE '%」「%'
+                  AND j.name_jp NOT LIKE '%amazon%'
+                  AND j.name_jp NOT LIKE '%ポケモンセンターオンライン%'
+                  AND j.name_jp NOT LIKE '%購入はこちら%'
+                GROUP BY j.pg
+                ORDER BY COALESCE(j.release_date, MIN(a.release_date)) IS NULL,
+                         COALESCE(j.release_date, MIN(a.release_date)) DESC,
+                         CAST(j.pg AS INTEGER) ASC
+            """)
+            for row in await cursor.fetchall():
+                d = dict(row)
+                # logo 優先：artofpkm（curated, 設計過的 logo） → jp_card_list_set（卡的縮圖、暫代）
+                logo = d.get("art_logo_url") or d.get("jp_logo_url")
+                # JP logo 可能是 /assets/... 相對路徑、需前置官方 domain
+                if logo and logo.startswith("/"):
+                    logo = "https://www.pokemon-card.com" + logo
+                result.append({
+                    "set_id": d["set_id"],
+                    "name": d.get("name_jp"),
+                    "name_jp": d.get("name_jp"),
+                    "name_zh": None,
+                    "logo_url": logo,
+                    "total_cards": d.get("total_cards"),
+                    # release_date 優先：jp_card_list_set.release_date（pokemon-card.com 官方）→ artofpkm fallback
+                    "release_date": d.get("jp_release_date") or d.get("art_release_date"),
+                    # 前端 filter 要 art_id != null；對不到 artofpkm 時用 pg 當 synthetic id
+                    "art_id": d.get("artofpkm_id") if d.get("artofpkm_id") is not None else d.get("pg"),
+                    "era": d.get("era") or "Other",
+                    # display_order 沒 artofpkm 時留 null，讓前端 ?? 落到 99999
+                    "display_order": d.get("art_display_order"),
+                    "language": "jp",
+                    "source": "pokellector_jp",
+                })
+
+        elif language == "en":
+            cursor = await db.execute("""
+                SELECT set_id, name, series, total AS total_cards,
+                       release_date, logo_url, symbol_url
+                FROM en_card_list_set
+                ORDER BY release_date IS NULL, release_date DESC, set_id ASC
+            """)
+            for row in await cursor.fetchall():
+                d = dict(row)
+                result.append({
+                    "set_id": d["set_id"],
+                    "name": d.get("name"),
+                    "name_jp": None,
+                    "name_zh": None,
+                    "logo_url": d.get("logo_url"),
+                    "symbol_url": d.get("symbol_url"),
+                    "total_cards": d.get("total_cards"),
+                    "release_date": d.get("release_date"),
+                    "series": d.get("series"),
+                    "era": d.get("series") or "Other",
+                    # 前端 filterByLang('en') 不要求 art_id，但帶 set_id 當 synthetic 給統一介面
+                    "art_id": d["set_id"],
+                    "language": "en",
+                    "source": "pokemontcg",
+                })
+
+        elif language == "tw":
+            cursor = await db.execute("""
+                SELECT s.expansion_code AS set_id,
+                       s.name_zh,
+                       s.card_count AS total_cards,
+                       s.logo_url,
+                       em.era AS era
+                FROM tw_card_list_set s
+                LEFT JOIN tw_set_era_map em ON em.expansion_code = s.expansion_code
+                ORDER BY s.expansion_code DESC
+            """)
+            for row in await cursor.fetchall():
+                d = dict(row)
+                result.append({
+                    "set_id": d["set_id"],
+                    "name": d.get("name_zh"),
+                    "name_jp": None,
+                    "name_zh": d.get("name_zh"),
+                    "logo_url": d.get("logo_url"),
+                    "total_cards": d.get("total_cards"),
+                    "release_date": None,
+                    "era": d.get("era") or "Other",
+                    # 前端 filterByLang('tw') 不需 art_id，但為了相容 setCardHtml 也帶上
+                    "art_id": d["set_id"],
+                    "language": "tw",
+                    "source": "pokemon_asia",
+                })
+
         return result
 
 
 async def get_cards_by_set(set_id: str) -> list:
-    """取得系列的所有卡片"""
+    """取得系列的所有卡片。由 set_id 格式自動判斷語言（jp 數字、en 小寫、tw 大寫）。
+    回傳統一欄位：set_id, card_number, name, name_jp, name_zh, image_url, rarity, language
+    """
+    lang = _detect_lang_from_set_id(set_id)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+
+        if lang == "jp":
+            # JOIN jp_card_pg_link 支援 N:N（一張卡可屬多個 pg）
+            cursor = await db.execute("""
+                SELECT ? AS set_id,
+                       c.cardID,
+                       c.card_number, c.name_jp, c.thumb_url AS image_url,
+                       c.rarity, c.illustrator, c.hp, c.image_id
+                FROM jp_card_list c
+                JOIN jp_card_pg_link l ON l.cardID = c.cardID
+                WHERE l.pg = ?
+                ORDER BY CAST(c.card_number AS INTEGER), c.image_id
+            """, (set_id, set_id))
+            rows = [dict(r) for r in await cursor.fetchall()]
+
+            # promo set (9001/9002/9003) 為各期 promo 集合、每張卡發售日期不同
+            # 用 cardID 對照各非-promo expansion 的 min_cardID 推算 inferred_release_date
+            if set_id in ("9001", "9002", "9003"):
+                cur2 = await db.execute("""
+                    SELECT s.pg, s.release_date, s.name_jp AS set_name, MIN(c.cardID) AS min_cid
+                    FROM jp_card_list_set s
+                    JOIN jp_card_pg_link l ON l.pg = s.pg
+                    JOIN jp_card_list c ON c.cardID = l.cardID
+                    WHERE s.release_date IS NOT NULL AND s.pg NOT IN ('9001','9002','9003')
+                    GROUP BY s.pg
+                    HAVING MIN(c.cardID) IS NOT NULL
+                    ORDER BY MIN(c.cardID) ASC
+                """)
+                ranges = [
+                    (r["min_cid"], r["release_date"], r["set_name"])
+                    for r in await cur2.fetchall()
+                ]
+
+                def _infer(cid):
+                    best_date = None
+                    best_name = None
+                    for mc, dt, nm in ranges:
+                        if mc <= cid:
+                            best_date = dt
+                            best_name = nm
+                        else:
+                            break
+                    return best_date, best_name
+
+                for r in rows:
+                    cid = r.get("cardID")
+                    if cid is not None:
+                        dt, nm = _infer(cid)
+                        r["inferred_release_date"] = dt
+                        r["inferred_set_name"] = nm
+
+                # 每張卡的「収録商品」(pokemon-card.com 官方)：取 MIN(product_pg) 當 canonical
+                cur3 = await db.execute("""
+                    SELECT p.cardID, p.product_pg, p.product_name_jp, p.product_name_zh
+                    FROM jp_promo_card_product p
+                    JOIN (
+                        SELECT cardID, MIN(product_pg) AS min_pg
+                        FROM jp_promo_card_product
+                        WHERE product_pg > 0
+                        GROUP BY cardID
+                    ) m ON m.cardID = p.cardID AND m.min_pg = p.product_pg
+                """)
+                product_map = {
+                    r["cardID"]: (r["product_pg"], r["product_name_jp"], r["product_name_zh"])
+                    for r in await cur3.fetchall()
+                }
+                for r in rows:
+                    cid = r.get("cardID")
+                    if cid in product_map:
+                        r["product_pg"] = product_map[cid][0]
+                        r["product_name_jp"] = product_map[cid][1]
+                        r["product_name_zh"] = product_map[cid][2]
+
+            for r in rows:
+                # JP thumb_url 是 /assets/... 相對路徑、要前置官方 domain
+                u = r.get("image_url")
+                if u and u.startswith("/"):
+                    r["image_url"] = "https://www.pokemon-card.com" + u
+                r["name"] = r.get("name_jp")
+                r["name_zh"] = None
+                r["language"] = "jp"
+            return rows
+
+        if lang == "en":
+            cursor = await db.execute("""
+                SELECT set_id, number AS card_number, name,
+                       image_large_url AS image_url, image_small_url,
+                       rarity, artist AS illustrator, hp, types, supertype
+                FROM en_card_list
+                WHERE set_id = ?
+                ORDER BY CAST(REPLACE(REPLACE(number,'a',''),'b','') AS INTEGER)
+            """, (set_id,))
+            rows = [dict(r) for r in await cursor.fetchall()]
+            for r in rows:
+                r["name_jp"] = None
+                r["name_zh"] = None
+                r["language"] = "en"
+            return rows
+
+        # tw
         cursor = await db.execute("""
-            SELECT * FROM card_list
-            WHERE set_id = ?
-            ORDER BY CAST(card_number AS INTEGER)
+            SELECT expansion_code AS set_id,
+                   card_number, name_zh, thumb_url AS image_url,
+                   rarity, illustrator, hp, card_type, stage
+            FROM tw_card_list
+            WHERE expansion_code = ?
+            ORDER BY card_number
         """, (set_id,))
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        rows = [dict(r) for r in await cursor.fetchall()]
+        for r in rows:
+            r["name"] = r.get("name_zh")
+            r["name_jp"] = None
+            r["language"] = "tw"
+        return rows
 
 
 async def search_cards_in_list(query: str, limit: int = 300, language: str = "") -> list:
-    """在卡表中搜尋卡片（支援名稱、編號、名稱+編號、中文/日文名稱）。
+    """在三語新卡表中搜尋卡片（依 language 選表，空字串=全部）。
 
-    編號支援：
-      - 純數字: "43" 或 "043"（自動忽略前綴零）
-      - 帶 #: "#43"
-      - 含分母: "43/185" 或 "043/185"（取分子）
-
-    language: 'jp' / 'en' / '' (全部)
+    編號支援：純數字 / "043" / "#43" / "43/185"
+    language: 'jp' / 'en' / 'tw' / '' (全部)
+    回傳統一欄位：set_id, card_number, name, name_jp, name_zh, image_url, rarity, set_name, language
     """
     import re
     from app.pokemon_names import translate_to_english, translate_jp_to_english
 
-    # 中文/日文轉英文
-    query = translate_to_english(query)
-    query = translate_jp_to_english(query)
+    # 原始 query 用於 JP/TW（比對本地語言欄位）
+    # 翻譯後 query 用於 EN（比對英文 name 欄位）
+    query_orig = query.strip()
+    query_en = translate_jp_to_english(translate_to_english(query_orig)).strip()
 
     def _normalize_number(s: str) -> str:
-        """剝前綴零、若是 N/T 取分子。"""
         s = s.strip()
         if "/" in s:
             s = s.split("/", 1)[0]
         s = s.lstrip("0") or "0"
         return s
 
+    def _parse(q: str):
+        n: Optional[str] = None
+        name: Optional[str] = None
+        if q.startswith('#'):
+            n = _normalize_number(q[1:])
+        elif re.match(r'^\d+(/\d+)?$', q):
+            n = _normalize_number(q)
+        else:
+            m = re.match(r'^(.+?\D)\s*#?\s*(\d+(?:/\d+)?)$', q)
+            if m and m.group(1).strip():
+                name = m.group(1).strip()
+                n = _normalize_number(m.group(2))
+            else:
+                name = q
+        return name, n
+
+    name_part_local, number_part = _parse(query_orig)
+    name_part_en, _ = _parse(query_en)
+    name_like_local = f"%{name_part_local}%" if name_part_local else None
+    name_like_en = f"%{name_part_en}%" if name_part_en else None
+    # 給原本各搜尋函式用的 alias（向後相容）
+    name_part = name_part_local
+    name_like = name_like_local
+
+    async def _search_jp(db) -> list:
+        where = []
+        params: list = []
+        if name_part:
+            where.append("(c.name_jp LIKE ? OR c.romaji_name LIKE ?)")
+            params += [name_like, name_like]
+        if number_part:
+            where.append("CAST(c.card_number AS INTEGER) = CAST(? AS INTEGER)")
+            params.append(number_part)
+        wsql = " AND ".join(where) if where else "1=1"
+        cur = await db.execute(f"""
+            SELECT CAST(c.pg AS TEXT) AS set_id,
+                   c.card_number, c.name_jp, c.thumb_url AS image_url, c.rarity,
+                   c.set_name_jp AS set_name
+            FROM jp_card_list c
+            WHERE {wsql}
+            ORDER BY CAST(c.pg AS INTEGER) DESC
+            LIMIT ?
+        """, (*params, limit))
+        rows = [dict(r) for r in await cur.fetchall()]
+        for r in rows:
+            r["name"] = r.get("name_jp")
+            r["name_zh"] = None
+            r["language"] = "jp"
+        return rows
+
+    async def _search_en(db) -> list:
+        where = []
+        params: list = []
+        if name_part_en:
+            where.append("c.name LIKE ?")
+            params.append(name_like_en)
+        if number_part:
+            where.append("CAST(REPLACE(REPLACE(c.number,'a',''),'b','') AS INTEGER) = CAST(? AS INTEGER)")
+            params.append(number_part)
+        wsql = " AND ".join(where) if where else "1=1"
+        cur = await db.execute(f"""
+            SELECT c.set_id, c.number AS card_number, c.name,
+                   c.image_large_url AS image_url, c.image_small_url,
+                   c.rarity, c.set_name AS set_name
+            FROM en_card_list c
+            WHERE {wsql}
+            ORDER BY c.set_release_date DESC
+            LIMIT ?
+        """, (*params, limit))
+        rows = [dict(r) for r in await cur.fetchall()]
+        for r in rows:
+            r["name_jp"] = None
+            r["name_zh"] = None
+            r["language"] = "en"
+        return rows
+
+    async def _search_tw(db) -> list:
+        where = []
+        params: list = []
+        if name_part:
+            where.append("c.name_zh LIKE ?")
+            params.append(name_like)
+        if number_part:
+            where.append("CAST(c.card_number AS INTEGER) = CAST(? AS INTEGER)")
+            params.append(number_part)
+        wsql = " AND ".join(where) if where else "1=1"
+        cur = await db.execute(f"""
+            SELECT c.expansion_code AS set_id,
+                   c.card_number, c.name_zh, c.thumb_url AS image_url, c.rarity,
+                   c.set_name_zh AS set_name
+            FROM tw_card_list c
+            WHERE {wsql}
+            LIMIT ?
+        """, (*params, limit))
+        rows = [dict(r) for r in await cur.fetchall()]
+        for r in rows:
+            r["name"] = r.get("name_zh")
+            r["name_jp"] = None
+            r["language"] = "tw"
+        return rows
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-
-        name_part = None
-        number_part = None
-
-        q = query.strip()
-
-        # 純編號優先：純數字 / N/T / #N
-        if q.startswith('#'):
-            number_part = _normalize_number(q[1:])
-        elif re.match(r'^\d+(/\d+)?$', q):
-            number_part = _normalize_number(q)
-        else:
-            # name + 編號（編號前必須有非數字字元）
-            match = re.match(r'^(.+?\D)\s*#?\s*(\d+(?:/\d+)?)$', q)
-            if match and match.group(1).strip():
-                name_part = match.group(1).strip()
-                number_part = _normalize_number(match.group(2))
-            else:
-                name_part = q
-
-        # language filter（SQL 層）
-        lang_clause = ""
-        lang_params: list = []
-        if language in ("jp", "en"):
-            lang_clause = " AND cl.set_id LIKE ?"
-            lang_params = [f"{language}-%"]
-
-        # 建立查詢（name 比對含中文名 cl.name_zh）
-        if name_part and number_part:
-            cursor = await db.execute(f"""
-                SELECT cl.*, cs.name as set_name
-                FROM card_list cl
-                LEFT JOIN card_sets cs ON cl.set_id = cs.set_id
-                WHERE (cl.name LIKE ? OR cl.name_jp LIKE ? OR cl.name_zh LIKE ?)
-                  AND CAST(cl.card_number AS INTEGER) = CAST(? AS INTEGER)
-                  {lang_clause}
-                ORDER BY cs.updated_at DESC
-                LIMIT ?
-            """, (f"%{name_part}%", f"%{name_part}%", f"%{name_part}%", number_part, *lang_params, limit))
-        elif number_part:
-            cursor = await db.execute(f"""
-                SELECT cl.*, cs.name as set_name
-                FROM card_list cl
-                LEFT JOIN card_sets cs ON cl.set_id = cs.set_id
-                WHERE CAST(cl.card_number AS INTEGER) = CAST(? AS INTEGER)
-                  {lang_clause}
-                ORDER BY cs.updated_at DESC
-                LIMIT ?
-            """, (number_part, *lang_params, limit))
-        else:
-            cursor = await db.execute(f"""
-                SELECT cl.*, cs.name as set_name
-                FROM card_list cl
-                LEFT JOIN card_sets cs ON cl.set_id = cs.set_id
-                WHERE (cl.name LIKE ? OR cl.name_jp LIKE ? OR cl.name_zh LIKE ?)
-                  {lang_clause}
-                ORDER BY cs.updated_at DESC, CAST(cl.card_number AS INTEGER)
-                LIMIT ?
-            """, (f"%{name_part}%", f"%{name_part}%", f"%{name_part}%", *lang_params, limit))
-
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        if language == "jp":
+            return await _search_jp(db)
+        if language == "en":
+            return await _search_en(db)
+        if language == "tw":
+            return await _search_tw(db)
+        # 全部：合併三語、各取 limit 再截
+        out = await _search_jp(db) + await _search_en(db) + await _search_tw(db)
+        return out[:limit]
 
 
 async def get_card_set_stats() -> dict:
-    """取得卡表統計"""
+    """卡表統計：三語 set 與卡片總數加總。"""
     async with aiosqlite.connect(DB_PATH) as db:
-        # 系列數
-        cursor = await db.execute("SELECT COUNT(*) FROM card_sets")
-        set_count = (await cursor.fetchone())[0]
-
-        # 卡片數
-        cursor = await db.execute("SELECT COUNT(*) FROM card_list")
-        card_count = (await cursor.fetchone())[0]
-
+        jp_sets = (await (await db.execute("SELECT COUNT(*) FROM jp_card_list_set")).fetchone())[0]
+        en_sets = (await (await db.execute("SELECT COUNT(*) FROM en_card_list_set")).fetchone())[0]
+        tw_sets = (await (await db.execute("SELECT COUNT(*) FROM tw_card_list_set")).fetchone())[0]
+        jp_cards = (await (await db.execute("SELECT COUNT(*) FROM jp_card_list")).fetchone())[0]
+        en_cards = (await (await db.execute("SELECT COUNT(*) FROM en_card_list")).fetchone())[0]
+        tw_cards = (await (await db.execute("SELECT COUNT(*) FROM tw_card_list")).fetchone())[0]
         return {
-            "total_sets": set_count,
-            "total_cards": card_count,
+            "total_sets": jp_sets + en_sets + tw_sets,
+            "total_cards": jp_cards + en_cards + tw_cards,
+            "by_language": {
+                "jp": {"sets": jp_sets, "cards": jp_cards},
+                "en": {"sets": en_sets, "cards": en_cards},
+                "tw": {"sets": tw_sets, "cards": tw_cards},
+            },
         }
 
 

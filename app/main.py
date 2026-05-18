@@ -1060,11 +1060,38 @@ async def get_set_preview_image(set_id: str):
             if row2 and row2["logo_url"]:
                 return {"set_id": set_id, "image_url": row2["logo_url"], "source": "artofpkm"}
 
-        # 3) fallback：card_sets.logo_url（pokellector）
-        fallback_row = conn.execute(
-            "SELECT logo_url FROM card_sets WHERE set_id = ?", (set_id,)
-        ).fetchone()
-        fallback_logo = fallback_row["logo_url"] if fallback_row else None
+        # 3) fallback：依序看 jp/tw/en 新表、再看舊 card_sets
+        fallback_logo = None
+        # 3a) JP: pg 是純數字
+        if set_id.isdigit():
+            jp_row = conn.execute(
+                "SELECT logo_url FROM jp_card_list_set WHERE pg = ?", (set_id,)
+            ).fetchone()
+            if jp_row and jp_row["logo_url"]:
+                fallback_logo = jp_row["logo_url"]
+                # JP thumb 是 /assets/... 相對路徑、要前置官方 domain
+                if fallback_logo.startswith("/"):
+                    fallback_logo = "https://www.pokemon-card.com" + fallback_logo
+        # 3b) TW: expansion_code (含字母大寫 / 有 dash)
+        if not fallback_logo:
+            tw_row = conn.execute(
+                "SELECT logo_url FROM tw_card_list_set WHERE expansion_code = ?", (set_id,)
+            ).fetchone()
+            if tw_row and tw_row["logo_url"]:
+                fallback_logo = tw_row["logo_url"]
+        # 3c) EN
+        if not fallback_logo:
+            en_row = conn.execute(
+                "SELECT logo_url FROM en_card_list_set WHERE set_id = ?", (set_id,)
+            ).fetchone()
+            if en_row and en_row["logo_url"]:
+                fallback_logo = en_row["logo_url"]
+        # 3d) 舊 card_sets
+        if not fallback_logo:
+            old_row = conn.execute(
+                "SELECT logo_url FROM card_sets WHERE set_id = ?", (set_id,)
+            ).fetchone()
+            fallback_logo = old_row["logo_url"] if old_row else None
     finally:
         conn.close()
 
@@ -1249,10 +1276,15 @@ async def get_card_prices(set_id: str, card_number: str):
                       cl.psa_pop_total, cl.psa_gem_rate,
                       cl.snkr_listing_count, cl.snkr_min_price_jpy, cl.snkr_listing_updated_at,
                       cs.name AS set_name, cs.set_code AS set_code, cs.total_cards AS set_total,
-                      v.sales_7d, v.sales_30d, v.sales_all
+                      v.sales_7d, v.sales_30d, v.sales_all,
+                      jcl.hp AS jp_hp, jcl.illustrator AS jp_illustrator,
+                      jcl.types_json AS jp_types_json, jcl.attacks_json AS jp_attacks_json,
+                      jcl.weakness AS jp_weakness, jcl.resistance AS jp_resistance,
+                      jcl.retreat_cost AS jp_retreat_cost, jcl.regulation_mark AS jp_regulation_mark
                FROM card_list cl
                LEFT JOIN card_sets cs ON cl.set_id = cs.set_id
                LEFT JOIN card_volume_stats v ON v.set_id = cl.set_id AND v.card_number = cl.card_number
+               LEFT JOIN jp_card_list jcl ON jcl.pg = cl.set_id AND jcl.card_number = cl.card_number
                WHERE cl.set_id=? AND cl.card_number=?""",
             (set_id, card_number),
         )
@@ -1282,7 +1314,70 @@ async def get_card_prices(set_id: str, card_number: str):
             "set_code": row["set_code"] if row else None,
             "set_total": row["set_total"] if row else None,
             "card_number": card_number,
+            # JP detail enrichment（從 jp_card_list JOIN 進來、非 JP set 自然為 None）
+            "hp": row["jp_hp"] if row else None,
+            "illustrator": row["jp_illustrator"] if row else None,
+            "types": (
+                __import__('json').loads(row["jp_types_json"])
+                if row and row["jp_types_json"] else []
+            ),
+            "attacks": (
+                __import__('json').loads(row["jp_attacks_json"])
+                if row and row["jp_attacks_json"] else []
+            ),
+            "weakness": row["jp_weakness"] if row else None,
+            "resistance": row["jp_resistance"] if row else None,
+            "retreat_cost": row["jp_retreat_cost"] if row else None,
+            "regulation_mark": row["jp_regulation_mark"] if row else None,
         } if row else None
+
+        # Fallback: pg=950 / 9001 / 9002 / 9003 等尚未 INSERT 到 card_list 的 JP set，
+        # 從 jp_card_list 取 + 帶上新欄位（hp/types/attacks/W/R/R/illust/regulation_mark）
+        if not card_meta:
+            import json as _json_fallback
+            cur_jp = await db.execute("""
+                SELECT jcl.name_jp,
+                       ('https://www.pokemon-card.com' || jcl.thumb_url) AS image_url,
+                       jcl.rarity, jcl.set_code, jcl.set_name_jp AS set_name,
+                       jcl.hp, jcl.illustrator, jcl.card_number,
+                       jcl.types_json, jcl.attacks_json, jcl.weakness,
+                       jcl.resistance, jcl.retreat_cost, jcl.regulation_mark,
+                       jcls.hit_cnt AS set_total
+                FROM jp_card_list jcl
+                JOIN jp_card_pg_link pl ON pl.cardID = jcl.cardID
+                LEFT JOIN jp_card_list_set jcls ON jcls.pg = pl.pg
+                WHERE pl.pg = ? AND jcl.card_number = ?
+                LIMIT 1
+            """, (set_id, card_number))
+            jrow = await cur_jp.fetchone()
+            if jrow:
+                card_name = jrow["name_jp"] or ""
+                card_meta = {
+                    "name": None,
+                    "name_jp": jrow["name_jp"],
+                    "name_zh": None,
+                    "image_url": jrow["image_url"],
+                    "rarity": jrow["rarity"],
+                    "rarity_ocr": None,
+                    "psa_pop10": None, "psa_pop9": None, "psa_pop8": None,
+                    "psa_pop7": None, "psa_pop6": None,
+                    "psa_pop_total": None, "psa_gem_rate": None,
+                    "snkr_listing_count": None, "snkr_min_price_jpy": None,
+                    "snkr_listing_updated_at": None,
+                    "sales_7d": None, "sales_30d": None, "sales_all": None,
+                    "set_name": jrow["set_name"],
+                    "set_code": jrow["set_code"],
+                    "set_total": jrow["set_total"],
+                    "card_number": card_number,
+                    "hp": jrow["hp"],
+                    "illustrator": jrow["illustrator"],
+                    "types": _json_fallback.loads(jrow["types_json"]) if jrow["types_json"] else [],
+                    "attacks": _json_fallback.loads(jrow["attacks_json"]) if jrow["attacks_json"] else [],
+                    "weakness": jrow["weakness"],
+                    "resistance": jrow["resistance"],
+                    "retreat_cost": jrow["retreat_cost"],
+                    "regulation_mark": jrow["regulation_mark"],
+                }
 
         # 取得價格歷史
         # 只回必要欄位，省 payload (省 listing_title 等大 text 一半 size)
@@ -1600,6 +1695,7 @@ async def sync_card_prices_api(set_id: str, card_number: str):
             card_name, is_cert=False, grade="10",
             card_number=card_number, set_name=set_name_en or set_id,
             set_name_jp=set_name_jp, card_name_jp=card_name_jp,
+            full_history=True,
         )
 
     ebay_results, snkr_results = await asyncio.gather(ebay_task, snkr_task)
@@ -1623,13 +1719,13 @@ async def sync_card_prices_api(set_id: str, card_number: str):
             except Exception:
                 pass
 
-        for r in snkr_results[:30]:
+        for r in snkr_results:
             try:
                 await db.execute("""
                     INSERT OR IGNORE INTO card_prices
                     (set_id, card_number, card_name, source, price_jpy, price_twd,
-                     listing_title, listing_url, sale_date, search_language)
-                    VALUES (?, ?, ?, 'snkrdunk', ?, ?, ?, ?, ?, 'jp')
+                     listing_title, listing_url, sale_date, search_language, psa_grade)
+                    VALUES (?, ?, ?, 'snkrdunk', ?, ?, ?, ?, ?, 'jp', 10)
                 """, (set_id, card_number, card_name, r.get("price_jpy"),
                       r.get("price_twd"), r.get("listing_title"),
                       r.get("listing_url"), r.get("sale_date")))
@@ -1674,6 +1770,283 @@ async def sync_card_prices_api(set_id: str, card_number: str):
         "language": language,
         "ebay_count": len(ebay_results),
         "snkrdunk_count": len(snkr_results),
+        "saved": saved,
+    }
+
+
+@app.post("/api/prices/sync_snkr/{pg}/{card_number}")
+async def sync_snkr_full_history(pg: str, card_number: str):
+    """SNKR-only full-history backfill 專用 endpoint。
+
+    與 /api/prices/sync/ 不同：
+      - 跳過 eBay（pilot/全量跑只動 SNKR、加速 ~80%）
+      - full_history=True：max_pages=500、抓到第一筆
+      - 直接從 jp_card_list / jp_card_list_set 查（不依賴 card_list 主表）
+      - 成功後 UPDATE jp_card_list.prices_synced_at（resume gating）
+
+    pg：jp_card_list_set.pg（數字字串、如 "950"）
+    card_number：jp_card_list.card_number
+    """
+    import aiosqlite
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT jcl.cardID, jcl.name_jp AS card_name_jp, jcl.name_alt AS card_name_en,
+                      jcls.name_jp AS set_name_jp
+               FROM jp_card_list jcl
+               LEFT JOIN jp_card_list_set jcls ON jcls.pg = jcl.pg
+               WHERE jcl.pg = ? AND jcl.card_number = ?""",
+            (pg, card_number),
+        )
+        row = await cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"jp_card_list pg={pg} card_number={card_number} not found")
+        card_id = row["cardID"]
+        card_name_jp = row["card_name_jp"]
+        card_name_en = row["card_name_en"] or card_name_jp or ""
+        set_name_jp = row["set_name_jp"] or ""
+
+    # set_id 用於寫 card_prices：與既有 promo 寫法一致（pg 數字字串）
+    set_id = pg
+
+    snkr_results = await get_snkrdunk_prices(
+        card_name_en, is_cert=False, grade="10",
+        card_number=card_number, set_name=set_id,
+        set_name_jp=set_name_jp, card_name_jp=card_name_jp,
+        full_history=True,
+    )
+
+    saved = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        for r in snkr_results:
+            try:
+                await db.execute("""
+                    INSERT OR IGNORE INTO card_prices
+                    (set_id, card_number, card_name, source, price_jpy, price_twd,
+                     listing_title, listing_url, sale_date, search_language, psa_grade)
+                    VALUES (?, ?, ?, 'snkrdunk', ?, ?, ?, ?, ?, 'jp', 10)
+                """, (set_id, card_number, card_name_jp or card_name_en,
+                      r.get("price_jpy"), r.get("price_twd"),
+                      r.get("listing_title"), r.get("listing_url"),
+                      r.get("sale_date")))
+                saved += 1
+            except Exception:
+                pass
+
+        # 標記已 sync — resume gating（即使 0 筆也標、避免重複跑無 mapping 的卡）
+        # 用 (pg, card_number) 而非 cardID：同組可能有 ≥2 個 cardID（785 組重複），一次標齊避免 metadata gap
+        await db.execute(
+            "UPDATE jp_card_list SET prices_synced_at = CURRENT_TIMESTAMP "
+            "WHERE pg = ? AND card_number = ?",
+            (pg, card_number),
+        )
+        await db.commit()
+
+    return {
+        "pg": pg,
+        "card_number": card_number,
+        "cardID": card_id,
+        "snkrdunk_count": len(snkr_results),
+        "saved": saved,
+    }
+
+
+# JP 卡名 → EN 翻譯（多層 fallback：HTML strip → 地區/Team Rocket 前綴 → メガ →
+#   後綴抽取 → pokemon_dict / jp_term_dict 查找）
+import re as _re_jp2en
+_JP_CHAR_RE = _re_jp2en.compile(r'[ぁ-ゟ゠-ヿ一-龯]')
+_CARD_SUFFIX_RE = _re_jp2en.compile(r'(VMAX|VSTAR|VUNION|V-UNION|GMAX|GX|EX|ex|V)$')
+_HTML_TAG_RE = _re_jp2en.compile(r'<[^>]+>')
+_MEGA_HTML_RE = _re_jp2en.compile(r'pcg-megamark')
+_REGIONAL_PREFIXES = [
+    ('ガラル ', 'Galarian'),
+    ('アローラ ', 'Alolan'),
+    ('ヒスイ ', 'Hisuian'),
+    ('パルデア ', 'Paldean'),
+    ('ガラルの', 'Galarian'),
+    ('ヒスイの', 'Hisuian'),
+]
+_TEAM_ROCKET_PREFIX = 'ロケット団の'  # → "Team Rocket's"
+
+
+async def _translate_jp_card_name_to_en(card_name_jp: str, db) -> str | None:
+    """JP→EN multi-rule translation.
+
+    Order:
+      1. HTML strip (Bulbapedia <span class='pcg pcg-megamark'></span> → Mega marker)
+      2. ロケット団の prefix → Team Rocket's
+      3. 地區形 prefix (ガラル/アローラ/ヒスイ/パルデア) → Galarian/etc.
+      4. メガ prefix → Mega
+      5. Suffix V/VMAX/VSTAR/GX/EX/ex/GMAX/V-UNION
+      6. core lookup: pokemon_dict 優先、jp_term_dict 次之
+      7. 仍 miss → 全名 jp_term_dict（處理 trainer/energy）
+      8. 全 miss → None（caller 走 card_name_jp 路徑）
+    """
+    if not card_name_jp:
+        return None
+
+    raw = card_name_jp.strip()
+
+    # 1. HTML
+    is_mega = bool(_MEGA_HTML_RE.search(raw))
+    name = _HTML_TAG_RE.sub('', raw).strip()
+
+    # 2. Team Rocket
+    is_team_rocket = False
+    if name.startswith(_TEAM_ROCKET_PREFIX):
+        is_team_rocket = True
+        name = name[len(_TEAM_ROCKET_PREFIX):].strip()
+
+    # 3. Regional
+    regional = None
+    for prefix, label in _REGIONAL_PREFIXES:
+        if name.startswith(prefix):
+            regional = label
+            name = name[len(prefix):].strip()
+            break
+
+    # 4. Mega
+    if name.startswith('メガ'):
+        is_mega = True
+        name = name[2:].strip()
+
+    # 5. Suffix
+    m = _CARD_SUFFIX_RE.search(name)
+    suffix = m.group(0) if m else ''
+    core = (name[:-len(suffix)] if suffix else name).strip()
+
+    en_core = None
+    if core:
+        if _JP_CHAR_RE.search(core):
+            # 6. pokemon_dict 優先
+            cur = await db.execute(
+                "SELECT name_en FROM pokemon_dict WHERE name_jp = ? LIMIT 1", (core,)
+            )
+            row = await cur.fetchone()
+            if row:
+                en_core = row[0]
+            else:
+                # jp_term_dict
+                cur = await db.execute(
+                    "SELECT name_en FROM jp_term_dict WHERE name_jp = ? LIMIT 1", (core,)
+                )
+                row = await cur.fetchone()
+                if row:
+                    en_core = row[0]
+        else:
+            # core 已是英數 — 直接用
+            en_core = core
+
+    # 7. 全名 fallback（trainer / energy / 含空格與其他符號的卡名）
+    if not en_core:
+        cur = await db.execute(
+            "SELECT name_en FROM jp_term_dict WHERE name_jp = ? LIMIT 1", (raw,)
+        )
+        row = await cur.fetchone()
+        if row:
+            en_core = row[0]
+            # reset 前綴/後綴標記 — 全名查到不需再加飾詞
+            is_mega = False
+            is_team_rocket = False
+            regional = None
+            suffix = ''
+
+    if not en_core:
+        return None
+
+    parts = []
+    if is_team_rocket:
+        parts.append("Team Rocket's")
+    if is_mega:
+        parts.append('Mega')
+    if regional:
+        parts.append(regional)
+    parts.append(en_core)
+    if suffix:
+        parts.append(suffix)
+    return ' '.join(parts)
+
+
+@app.post("/api/prices/sync_ebay/{pg}/{card_number}")
+async def sync_ebay_full_history(pg: str, card_number: str):
+    """eBay-only full-history backfill 專用 endpoint。
+
+    與 /api/prices/sync/ 不同：
+      - 跳過 SNKRDUNK（eBay-only）
+      - full_history=True：max_pages=50
+      - 直接從 jp_card_list / jp_card_list_set 查（不依賴 card_list 主表）
+      - INSERT 寫 psa_grade=10（與 SNKR full-history backfill 對齊）
+      - 成功後 UPDATE jp_card_list.ebay_prices_synced_at（resume gating）
+      - 用 pokemon_dict 把日文卡名翻成英文、提升 eBay 英文標題 listing 命中率
+
+    pg：jp_card_list_set.pg（數字字串、如 "950"）
+    card_number：jp_card_list.card_number
+    """
+    import aiosqlite
+    from app.scraper.ebay import get_ebay_prices
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT jcl.cardID, jcl.name_jp AS card_name_jp, jcl.name_alt AS card_name_en,
+                      jcls.name_jp AS set_name_jp
+               FROM jp_card_list jcl
+               LEFT JOIN jp_card_list_set jcls ON jcls.pg = jcl.pg
+               WHERE jcl.pg = ? AND jcl.card_number = ?""",
+            (pg, card_number),
+        )
+        row = await cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"jp_card_list pg={pg} card_number={card_number} not found")
+        card_id = row["cardID"]
+        card_name_jp = row["card_name_jp"]
+        # 先嘗試 JP→EN 翻譯、fallback 到 name_alt / JP 原名
+        translated_en = await _translate_jp_card_name_to_en(card_name_jp, db)
+        card_name_en = translated_en or row["card_name_en"] or card_name_jp or ""
+
+    set_id = pg
+
+    # set_name=None：query 不放 set token、scraper 也對 JP 卡 bypass set-token post-filter
+    ebay_results = await get_ebay_prices(
+        card_name_en, is_cert=False, grade="10",
+        card_number=card_number, set_name=None,
+        language="jp", card_name_jp=card_name_jp,
+        verify_redirects=False,  # 2026-05-18 v2: 關掉 verify、靠 title regex（PSA 10 + non-PSA blacklist）把關
+                                 # 79+ catalog-redirect 的 row 多半是 eBay LH_Sold 確認的真實成交、只是 listing 被聚到 /p/ catalog
+        full_history=True,
+    )
+
+    saved = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        for r in ebay_results:
+            try:
+                await db.execute("""
+                    INSERT OR IGNORE INTO card_prices
+                    (set_id, card_number, card_name, source, price_usd, price_twd,
+                     listing_title, listing_url, sale_date, search_language, psa_grade)
+                    VALUES (?, ?, ?, 'ebay', ?, ?, ?, ?, ?, 'jp', 10)
+                """, (set_id, card_number, card_name_jp or card_name_en,
+                      r.get("price_usd"), r.get("price_twd"),
+                      r.get("listing_title"), r.get("listing_url"),
+                      r.get("sale_date")))
+                saved += 1
+            except Exception:
+                pass
+
+        # 標記已 sync（用 (pg, card_number) 避免 cardID 重複組漏標）
+        await db.execute(
+            "UPDATE jp_card_list SET ebay_prices_synced_at = CURRENT_TIMESTAMP "
+            "WHERE pg = ? AND card_number = ?",
+            (pg, card_number),
+        )
+        await db.commit()
+
+    return {
+        "pg": pg,
+        "card_number": card_number,
+        "cardID": card_id,
+        "ebay_count": len(ebay_results),
         "saved": saved,
     }
 
