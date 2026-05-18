@@ -2228,7 +2228,8 @@ async def auth_forgot_password(payload: dict = Body(...)):
         )
         await db.commit()
     # TODO: 對接真實郵件（SendGrid / SES / SMTP）
-    reset_link = f"http://localhost:5500/index.html#/reset?token={token}"
+    frontend_base = os.getenv("CARDPOOL_FRONTEND_URL", "http://localhost:8080").rstrip("/")
+    reset_link = f"{frontend_base}/index.html#/reset?token={token}"
     print(f"[EMAIL] {email} → 重設密碼連結 {reset_link} (1 小時內有效)")
     if _is_dev_mode():
         out["dev_token"] = token

@@ -80,7 +80,7 @@ async def get_user_by_id(user_id: int) -> Optional[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, email, display_name, line_user_id, created_at FROM users WHERE id=?",
+            "SELECT id, email, display_name, line_user_id, phone, phone_verified, role, created_at FROM users WHERE id=?",
             (user_id,),
         )
         row = await cur.fetchone()
@@ -92,7 +92,7 @@ async def authenticate(email: str, password: str) -> Optional[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, email, display_name, line_user_id, password_hash FROM users WHERE email=?",
+            "SELECT id, email, display_name, line_user_id, phone, phone_verified, role, password_hash FROM users WHERE email=?",
             (email,),
         )
         row = await cur.fetchone()
@@ -105,6 +105,9 @@ async def authenticate(email: str, password: str) -> Optional[dict]:
         "email": row["email"],
         "display_name": row["display_name"],
         "line_user_id": row["line_user_id"],
+        "phone": row["phone"],
+        "phone_verified": row["phone_verified"],
+        "role": row["role"],
     }
 
 
@@ -134,7 +137,8 @@ async def get_user_by_session(token: str) -> Optional[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            """SELECT u.id, u.email, u.display_name, u.line_user_id, s.expires_at
+            """SELECT u.id, u.email, u.display_name, u.line_user_id,
+                      u.phone, u.phone_verified, u.role, s.expires_at
                FROM sessions s JOIN users u ON s.user_id=u.id
                WHERE s.token=?""",
             (token,),
@@ -155,6 +159,9 @@ async def get_user_by_session(token: str) -> Optional[dict]:
         "email": row["email"],
         "display_name": row["display_name"],
         "line_user_id": row["line_user_id"],
+        "phone": row["phone"],
+        "phone_verified": row["phone_verified"],
+        "role": row["role"],
     }
 
 
@@ -177,3 +184,16 @@ async def get_current_user_optional(authorization: Optional[str] = Header(None))
         return None
     token = authorization.split(" ", 1)[1].strip()
     return await get_user_by_session(token)
+
+
+def require_role(*allowed_roles: str):
+    """FastAPI Depends factory — 限制只有指定 role 可呼叫。
+    用法：user: dict = Depends(require_role('staff'))
+         user: dict = Depends(require_role('authenticator', 'staff'))
+    """
+    async def _checker(user: dict = None, authorization: Optional[str] = Header(None)) -> dict:
+        u = await get_current_user(authorization)
+        if u.get("role") not in allowed_roles:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="權限不足")
+        return u
+    return _checker

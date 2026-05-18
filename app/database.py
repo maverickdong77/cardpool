@@ -117,9 +117,24 @@ def init_db():
             display_name TEXT,
             line_user_id TEXT,
             password_hash TEXT NOT NULL,
+            phone TEXT,
+            phone_verified INTEGER DEFAULT 0,
+            role TEXT NOT NULL DEFAULT 'user',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # users 表 idempotent ALTER（既有 DB 補欄位）
+    for col, typ in [
+        ("phone", "TEXT"),
+        ("phone_verified", "INTEGER DEFAULT 0"),
+        ("role", "TEXT NOT NULL DEFAULT 'user'"),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass  # 已存在
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
@@ -130,6 +145,66 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
+
+    # 手機簡訊驗證碼快取（註冊 / 換手機用）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS phone_codes (
+            phone TEXT PRIMARY KEY,
+            code TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # 忘記密碼 token
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS password_resets (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0,
+            expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id)")
+
+    # 賣家 KYC（撥款前必要實名 + 銀行帳戶）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS seller_profiles (
+            user_id INTEGER PRIMARY KEY,
+            real_name TEXT,
+            id_last4 TEXT,
+            bank_code TEXT,
+            bank_account TEXT,
+            kyc_status TEXT NOT NULL DEFAULT 'none',
+            kyc_verified_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
+    # 收貨地址簿（kind: home 宅配 / cvs 7-11/全家門市取貨）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS address_book (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'home',
+            recipient TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            zipcode TEXT,
+            addr_line TEXT,
+            cvs_brand TEXT,
+            cvs_store_id TEXT,
+            cvs_store_name TEXT,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_address_user ON address_book(user_id, is_default DESC)")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS listings (
