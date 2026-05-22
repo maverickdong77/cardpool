@@ -934,9 +934,15 @@ async def search_cards_in_list(query: str, limit: int = 300, language: str = "")
             LIMIT ?
         """, (*params, limit))
         rows = [dict(r) for r in await cur.fetchall()]
+        from app.main import _translate_jp_card_name_to_zh
         for r in rows:
             r["name"] = r.get("name_jp")
-            r["name_zh"] = None
+            zh = await _translate_jp_card_name_to_zh(r.get("name_jp"), db)
+            if not zh:
+                set_id = r.get("set_id")
+                cn_key = _norm_card_num_for_zh(r.get("card_number"))
+                zh = _JP_ZH_LOOKUP.get(f"{set_id}/{cn_key}")
+            r["name_zh"] = zh
             r["language"] = "jp"
         return rows
 
