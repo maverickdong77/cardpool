@@ -2264,6 +2264,78 @@ async def auth_register_request(payload: dict = Body(...)):
     return out
 
 
+@app.post("/api/auth/register-verify")
+async def auth_register_verify(payload: dict = Body(...)):
+    """流程 A 階段 2：使用者輸入驗證碼 → 建帳號 + 回 session token
+    payload: {email, code}
+    回應：{user, token}
+    """
+    import aiosqlite
+
+    email = (payload.get("email") or "").strip().lower()
+    code = (payload.get("code") or "").strip()
+
+    if not email or not code:
+        raise HTTPException(status_code=400, detail="缺少 email 或驗證碼")
+    if not _re_phone.fullmatch(r"\d{6}", code):
+        raise HTTPException(status_code=400, detail="驗證碼格式錯誤（6 位數字）")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 1. 查暫存資料
+        cur = await db.execute(
+            "SELECT code, password_hash, display_name, attempts, expires_at FROM email_verifications WHERE email=?",
+            (email,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="找不到此 email 的驗證紀錄、請重新註冊")
+        stored_code, pw_hash, display_name, attempts, expires_at = row
+
+        # 2. 超過嘗試次數
+        if attempts >= EMAIL_CODE_MAX_ATTEMPTS:
+            raise HTTPException(status_code=429, detail="嘗試次數過多、請重新註冊")
+
+        # 3. 過期
+        try:
+            exp = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+            if datetime.utcnow() > exp:
+                await db.execute("DELETE FROM email_verifications WHERE email=?", (email,))
+                await db.commit()
+                raise HTTPException(status_code=400, detail="驗證碼已過期、請重新註冊")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="驗證資料異常、請重新註冊")
+
+        # 4. attempt++
+        await db.execute("UPDATE email_verifications SET attempts=attempts+1 WHERE email=?", (email,))
+
+        # 5. 比對 code
+        if stored_code != code:
+            await db.commit()
+            raise HTTPException(status_code=400, detail="驗證碼錯誤")
+
+        # 6. 通過 → 二次檢查 email 沒被搶建（race condition 防禦）
+        if await (await db.execute("SELECT id FROM users WHERE email=?", (email,))).fetchone():
+            await db.execute("DELETE FROM email_verifications WHERE email=?", (email,))
+            await db.commit()
+            raise HTTPException(status_code=409, detail="此 email 已被註冊")
+
+        # 7. 建 user（直接 INSERT、不走 create_user 因為 password_hash 已預先 hash 好）
+        cur = await db.execute(
+            "INSERT INTO users (email, display_name, password_hash) VALUES (?, ?, ?)",
+            (email, display_name, pw_hash),
+        )
+        uid = cur.lastrowid
+
+        # 8. 刪暫存
+        await db.execute("DELETE FROM email_verifications WHERE email=?", (email,))
+        await db.commit()
+
+    # 9. 建 session
+    user = await auth_mod.get_user_by_id(uid)
+    token = await auth_mod.create_session(uid)
+    return {"user": user, "token": token}
+
+
 @app.post("/api/auth/register")
 async def auth_register(payload: dict = Body(...)):
     email = (payload.get("email") or "").strip().lower()
