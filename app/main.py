@@ -3116,11 +3116,18 @@ async def category_pokemon_cards(pkm_id: int):
             f"%{name_jp}%" if name_jp else "____", # 日文 fallback
         )
         rows = await (await db.execute(sql, params)).fetchall()
+        out_rows = [dict(r) for r in rows]
+        for r in out_rows:
+            sid = r.get("set_id") or ""
+            if sid.startswith("jp-") and r.get("name_jp"):
+                zh = await _translate_jp_card_name_to_zh(r.get("name_jp"), db)
+                if zh:
+                    r["name_zh"] = zh
 
         return {
             "pokemon": {"id": pkm_id, "name_en": name_en, "name_jp": name_jp},
-            "count": len(rows),
-            "cards": [dict(r) for r in rows],
+            "count": len(out_rows),
+            "cards": out_rows,
         }
 
 
@@ -3157,10 +3164,17 @@ async def category_character_cards(char_id: int):
             f"%{name_jp}%" if name_jp else "____",
         )
         rows = await (await db.execute(sql, params)).fetchall()
+        out_rows = [dict(r) for r in rows]
+        for r in out_rows:
+            sid = r.get("set_id") or ""
+            if sid.startswith("jp-") and r.get("name_jp"):
+                zh = await _translate_jp_card_name_to_zh(r.get("name_jp"), db)
+                if zh:
+                    r["name_zh"] = zh
         return {
             "character": {"id": char_id, "name_en": name_en, "name_jp": name_jp},
-            "count": len(rows),
-            "cards": [dict(r) for r in rows],
+            "count": len(out_rows),
+            "cards": out_rows,
         }
 
 
