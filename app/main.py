@@ -2016,6 +2016,9 @@ async def _translate_jp_card_name_to_zh(card_name_jp, db):
                 char_prefix_zh = row[0] + '的'
                 name = rest
 
+    # save name before Mega/regional strip — 給 メガXXX 是寶可夢名的 case fallback 用
+    name_pre_mega = name
+
     # Mega
     if name.startswith('メガ'):
         is_mega = True
@@ -2035,7 +2038,22 @@ async def _translate_jp_card_name_to_zh(card_name_jp, db):
     core = (name[:-len(suffix)] if suffix else name).strip()
 
     zh_core = None
-    if core:
+
+    # 整名 fallback for メガXXX 是寶可夢名（如 メガヤンマ=遠古巨蜓、メガニウム=大竺葵）
+    # 在剝 メガ 之前的 name + 抽完 suffix 當 key 查 pokemon_dict、命中就不剝飾詞
+    if name_pre_mega != core:
+        full_name_for_lookup = (name_pre_mega[:-len(suffix)] if suffix else name_pre_mega).strip()
+        if _JP_CHAR_RE.search(full_name_for_lookup):
+            cur = await db.execute(
+                "SELECT name_zh FROM pokemon_dict WHERE name_jp = ? LIMIT 1", (full_name_for_lookup,)
+            )
+            row = await cur.fetchone()
+            if row and row[0]:
+                zh_core = row[0]
+                is_mega = False
+                regional_zh = None
+
+    if not zh_core and core:
         if _JP_CHAR_RE.search(core):
             cur = await db.execute(
                 "SELECT name_zh FROM pokemon_dict WHERE name_jp = ? LIMIT 1", (core,)
