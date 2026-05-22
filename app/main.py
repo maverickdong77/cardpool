@@ -1277,6 +1277,7 @@ async def get_card_prices(set_id: str, card_number: str):
                       cl.snkr_listing_count, cl.snkr_min_price_jpy, cl.snkr_listing_updated_at,
                       cs.name AS set_name, cs.set_code AS set_code, cs.total_cards AS set_total,
                       v.sales_7d, v.sales_30d, v.sales_all,
+                      jcl.cardID AS jp_card_id,
                       jcl.hp AS jp_hp, jcl.illustrator AS jp_illustrator,
                       jcl.types_json AS jp_types_json, jcl.attacks_json AS jp_attacks_json,
                       jcl.weakness AS jp_weakness, jcl.resistance AS jp_resistance,
@@ -1315,6 +1316,7 @@ async def get_card_prices(set_id: str, card_number: str):
             "set_total": row["set_total"] if row else None,
             "card_number": card_number,
             # JP detail enrichment（從 jp_card_list JOIN 進來、非 JP set 自然為 None）
+            "jp_card_id": row["jp_card_id"] if row else None,
             "hp": row["jp_hp"] if row else None,
             "illustrator": row["jp_illustrator"] if row else None,
             "types": (
@@ -1336,7 +1338,8 @@ async def get_card_prices(set_id: str, card_number: str):
         if not card_meta:
             import json as _json_fallback
             cur_jp = await db.execute("""
-                SELECT jcl.name_jp,
+                SELECT jcl.cardID,
+                       jcl.name_jp,
                        ('https://www.pokemon-card.com' || jcl.thumb_url) AS image_url,
                        jcl.rarity, jcl.set_code, jcl.set_name_jp AS set_name,
                        jcl.hp, jcl.illustrator, jcl.card_number,
@@ -1369,6 +1372,7 @@ async def get_card_prices(set_id: str, card_number: str):
                     "set_code": jrow["set_code"],
                     "set_total": jrow["set_total"],
                     "card_number": card_number,
+                    "jp_card_id": jrow["cardID"],
                     "hp": jrow["hp"],
                     "illustrator": jrow["illustrator"],
                     "types": _json_fallback.loads(jrow["types_json"]) if jrow["types_json"] else [],
@@ -1638,7 +1642,8 @@ async def sync_card_prices_api(set_id: str, card_number: str):
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """SELECT cl.name, cl.name_jp AS card_name_jp,
-                      cs.name AS set_name_en, cs.name_jp AS set_name_jp
+                      cs.name AS set_name_en, cs.name_jp AS set_name_jp,
+                      cs.set_code AS set_code
                FROM card_list cl
                LEFT JOIN card_sets cs ON cl.set_id = cs.set_id
                WHERE cl.set_id = ? AND cl.card_number = ?""",
@@ -1651,6 +1656,7 @@ async def sync_card_prices_api(set_id: str, card_number: str):
         card_name_jp = row["card_name_jp"]
         set_name_en = row["set_name_en"]
         set_name_jp = row["set_name_jp"]
+        set_code = row["set_code"] or None
 
         # JP 卡無 name_jp 時嘗試從 pokemon_dict 反查（覆蓋 996 個 unique 寶可夢名）
         # 處理常見前綴/後綴：Mega/Dark/Light/X/Y/Imakuni? / ex/V/VMAX/VSTAR/GX/δ/-EX 等
@@ -1695,6 +1701,7 @@ async def sync_card_prices_api(set_id: str, card_number: str):
             card_name, is_cert=False, grade="10",
             card_number=card_number, set_name=set_name_en or set_id,
             set_name_jp=set_name_jp, card_name_jp=card_name_jp,
+            set_code=set_code,
             full_history=True,
         )
 
@@ -1743,7 +1750,7 @@ async def sync_card_prices_api(set_id: str, card_number: str):
             )
             from app.database import update_snkr_listing_meta
             import httpx as _httpx
-            apparel_id = _lookup_apparel_id(card_number, set_name_jp, card_name_jp)
+            apparel_id = _lookup_apparel_id(card_number, set_name_jp, card_name_jp, set_code=set_code)
             if apparel_id:
                 async with _httpx.AsyncClient(headers=DEFAULT_HEADERS) as _c:
                     a = await fetch_apparel(_c, apparel_id)
@@ -1793,6 +1800,7 @@ async def sync_snkr_full_history(pg: str, card_number: str):
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT jcl.cardID, jcl.name_jp AS card_name_jp, jcl.name_alt AS card_name_en,
+                      jcl.set_code AS set_code,
                       jcls.name_jp AS set_name_jp
                FROM jp_card_list jcl
                LEFT JOIN jp_card_list_set jcls ON jcls.pg = jcl.pg
@@ -1806,6 +1814,7 @@ async def sync_snkr_full_history(pg: str, card_number: str):
         card_name_jp = row["card_name_jp"]
         card_name_en = row["card_name_en"] or card_name_jp or ""
         set_name_jp = row["set_name_jp"] or ""
+        set_code = row["set_code"] or None
 
     # set_id 用於寫 card_prices：與既有 promo 寫法一致（pg 數字字串）
     set_id = pg
@@ -1814,6 +1823,7 @@ async def sync_snkr_full_history(pg: str, card_number: str):
         card_name_en, is_cert=False, grade="10",
         card_number=card_number, set_name=set_id,
         set_name_jp=set_name_jp, card_name_jp=card_name_jp,
+        set_code=set_code,
         full_history=True,
     )
 
@@ -1968,6 +1978,34 @@ async def _translate_jp_card_name_to_en(card_name_jp: str, db) -> str | None:
     return ' '.join(parts)
 
 
+# 2026-05-22: PSA-label query format mapping。賣家 eBay listing title 直接抄 PSA label 的字、
+# 模仿這個格式可以大幅提升 recall。Hardcode 5 pg = 涵蓋目前 1,309 待 sync 卡（其他 pg 已 sync）。
+# 未來新 set 加 entry 即可。Schema 不動、保 KISS。
+_PG_TO_EBAY_INFO = {
+    "949": {"set_code_en": "M2",  "set_name_en": "Inferno X",                       "release_year": 2025},
+    "950": {"set_code_en": "M2a", "set_name_en": "MEGA Dream ex",                   "release_year": 2025},
+    "951": {"set_code_en": "MC",  "set_name_en": "Start Deck 100 Battle Collection","release_year": 2025},
+    "952": {"set_code_en": "M3",  "set_name_en": "Munikis Zero",                    "release_year": 2026},
+    "953": {"set_code_en": "M4",  "set_name_en": "Ninja Spinner",                   "release_year": 2026},
+}
+
+# 2026-05-22: Rarity 縮寫 → PSA label / eBay listing 慣用全名。User 953/114 spot-check
+# 加 SAR → "SPECIAL ART RARE" 比不加 rarity recall +73%（45 → 78 listings）。
+# 沒列在 dict 的 rarity（C / U / R / 無標示 等）不加進 query — 賣家標題很少寫普卡稀有度。
+_RARITY_TO_EBAY = {
+    "SAR": "SPECIAL ART RARE",
+    "SR":  "SUPER RARE",
+    "UR":  "ULTRA RARE",
+    "AR":  "ART RARE",
+    "RR":  "DOUBLE RARE",
+    "HR":  "HYPER RARE",
+    "CHR": "CHARACTER RARE",
+    "SSR": "SHINY SUPER RARE",
+    "CSR": "CHARACTER SUPER RARE",
+    "MUR": "MEGA ULTRA RARE",
+}
+
+
 @app.post("/api/prices/sync_ebay/{pg}/{card_number}")
 async def sync_ebay_full_history(pg: str, card_number: str):
     """eBay-only full-history backfill 專用 endpoint。
@@ -1979,6 +2017,7 @@ async def sync_ebay_full_history(pg: str, card_number: str):
       - INSERT 寫 psa_grade=10（與 SNKR full-history backfill 對齊）
       - 成功後 UPDATE jp_card_list.ebay_prices_synced_at（resume gating）
       - 用 pokemon_dict 把日文卡名翻成英文、提升 eBay 英文標題 listing 命中率
+      - 2026-05-22：query 改用 PSA-label 格式（year+POKEMON JAPANESE+abbrev+set_name+#num+name+PSA grade）
 
     pg：jp_card_list_set.pg（數字字串、如 "950"）
     card_number：jp_card_list.card_number
@@ -1990,7 +2029,8 @@ async def sync_ebay_full_history(pg: str, card_number: str):
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT jcl.cardID, jcl.name_jp AS card_name_jp, jcl.name_alt AS card_name_en,
-                      jcls.name_jp AS set_name_jp
+                      jcl.rarity AS card_rarity,
+                      jcls.name_jp AS set_name_jp, jcls.release_date AS set_release_date
                FROM jp_card_list jcl
                LEFT JOIN jp_card_list_set jcls ON jcls.pg = jcl.pg
                WHERE jcl.pg = ? AND jcl.card_number = ?""",
@@ -2005,6 +2045,20 @@ async def sync_ebay_full_history(pg: str, card_number: str):
         translated_en = await _translate_jp_card_name_to_en(card_name_jp, db)
         card_name_en = translated_en or row["card_name_en"] or card_name_jp or ""
 
+        # 2026-05-22: 取 PSA-label query 所需的 set abbrev / set name / release year / rarity
+        info = _PG_TO_EBAY_INFO.get(pg, {})
+        set_code_en = info.get("set_code_en")
+        set_name_en = info.get("set_name_en")
+        release_year = info.get("release_year")
+        # 若 hardcode dict 沒覆蓋 pg、fallback 從 release_date 拆年份
+        if release_year is None and row["set_release_date"]:
+            try:
+                release_year = int(str(row["set_release_date"])[:4])
+            except (ValueError, TypeError):
+                release_year = None
+        # Rarity 縮寫 → 賣家標題慣用全名（SAR → "SPECIAL ART RARE"）
+        rarity_full = _RARITY_TO_EBAY.get(row["card_rarity"]) if row["card_rarity"] else None
+
     set_id = pg
 
     # set_name=None：query 不放 set token、scraper 也對 JP 卡 bypass set-token post-filter
@@ -2015,6 +2069,10 @@ async def sync_ebay_full_history(pg: str, card_number: str):
         verify_redirects=False,  # 2026-05-18 v2: 關掉 verify、靠 title regex（PSA 10 + non-PSA blacklist）把關
                                  # 79+ catalog-redirect 的 row 多半是 eBay LH_Sold 確認的真實成交、只是 listing 被聚到 /p/ catalog
         full_history=True,
+        set_code_en=set_code_en,
+        set_name_en=set_name_en,
+        release_year=release_year,
+        rarity_full=rarity_full,
     )
 
     saved = 0
@@ -2122,6 +2180,88 @@ async def _verify_phone_code(phone: str, code: str) -> bool:
         await db.execute("DELETE FROM phone_codes WHERE phone=?", (phone,))
         await db.commit()
         return True
+
+
+# ===== Email 驗證碼註冊（流程 A：先驗證才註冊）=====
+
+EMAIL_CODE_TTL_MIN = 10              # 驗證碼 10 分鐘過期
+EMAIL_CODE_RESEND_COOLDOWN_SEC = 60  # 重發冷卻 60 秒
+EMAIL_CODE_MAX_ATTEMPTS = 5          # 最多驗證 5 次
+
+
+def _gen_email_code() -> str:
+    """產 6 位數字驗證碼"""
+    return "".join(_secrets.choice("0123456789") for _ in range(6))
+
+
+@app.post("/api/auth/register-request")
+async def auth_register_request(payload: dict = Body(...)):
+    """流程 A 階段 1：填註冊表單 → 暫存資料 + 寄驗證碼到 email
+    payload: {email, password, display_name?}
+    回應：{ok: true, message, dev_code?}
+    """
+    from app.email_sender import send_verification_code as _send_code
+    import aiosqlite
+
+    email = (payload.get("email") or "").strip().lower()
+    password = payload.get("password", "")
+    display_name = (payload.get("display_name") or "").strip() or email.split("@")[0]
+
+    # 1. 格式驗證
+    if not auth_mod.EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="email 格式錯誤")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="密碼至少 6 字元")
+
+    # 2. email 已註冊檢查
+    async with aiosqlite.connect(DB_PATH) as db:
+        if await (await db.execute("SELECT id FROM users WHERE email=?", (email,))).fetchone():
+            raise HTTPException(status_code=409, detail="此 email 已註冊")
+
+        # 3. 重發冷卻：同 email 60 秒內已寄過就擋
+        cur = await db.execute(
+            "SELECT created_at FROM email_verifications WHERE email=?", (email,)
+        )
+        row = await cur.fetchone()
+        if row:
+            try:
+                last = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+                if (datetime.utcnow() - last).total_seconds() < EMAIL_CODE_RESEND_COOLDOWN_SEC:
+                    raise HTTPException(status_code=429, detail=f"請等 {EMAIL_CODE_RESEND_COOLDOWN_SEC} 秒再重發")
+            except ValueError:
+                pass
+
+        # 4. 產 code + hash 密碼 + UPSERT 暫存
+        try:
+            pw_hash = auth_mod.hash_password(password)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        code = _gen_email_code()
+        expires = (datetime.utcnow() + timedelta(minutes=EMAIL_CODE_TTL_MIN)).strftime("%Y-%m-%d %H:%M:%S")
+
+        await db.execute(
+            """INSERT INTO email_verifications (email, code, password_hash, display_name, attempts, expires_at, created_at)
+               VALUES (?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(email) DO UPDATE SET
+                   code=excluded.code,
+                   password_hash=excluded.password_hash,
+                   display_name=excluded.display_name,
+                   attempts=0,
+                   expires_at=excluded.expires_at,
+                   created_at=CURRENT_TIMESTAMP""",
+            (email, code, pw_hash, display_name, expires),
+        )
+        await db.commit()
+
+    # 5. 寄信
+    ok = _send_code(email, code)
+    if not ok:
+        raise HTTPException(status_code=502, detail="寄信失敗、請稍後再試")
+
+    out = {"ok": True, "message": f"驗證碼已寄到 {email}（10 分鐘內有效）"}
+    if _is_dev_mode():
+        out["dev_code"] = code
+    return out
 
 
 @app.post("/api/auth/register")
