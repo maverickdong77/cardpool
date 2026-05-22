@@ -820,14 +820,18 @@ async def get_cards_by_set(set_id: str) -> list:
                         r["product_name_jp"] = product_map[cid][1]
                         r["product_name_zh"] = product_map[cid][2]
 
+            from app.main import _translate_jp_card_name_to_zh
             for r in rows:
                 # JP thumb_url 是 /assets/... 相對路徑、要前置官方 domain
                 u = r.get("image_url")
                 if u and u.startswith("/"):
                     r["image_url"] = "https://www.pokemon-card.com" + u
                 r["name"] = r.get("name_jp")
-                cn_key = _norm_card_num_for_zh(r.get("card_number"))
-                r["name_zh"] = _JP_ZH_LOOKUP.get(f"{set_id}/{cn_key}")
+                zh = await _translate_jp_card_name_to_zh(r.get("name_jp"), db)
+                if not zh:
+                    cn_key = _norm_card_num_for_zh(r.get("card_number"))
+                    zh = _JP_ZH_LOOKUP.get(f"{set_id}/{cn_key}")
+                r["name_zh"] = zh
                 r["language"] = "jp"
             return rows
 
