@@ -238,6 +238,54 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_address_user ON address_book(user_id, is_default DESC)")
 
+    # ========== Portfolio 持倉（我的卡冊）==========
+    # spec: docs/superpowers/specs/2026-05-22-my-portfolio-design.md
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS portfolio_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            tcg TEXT NOT NULL DEFAULT 'pokemon',
+            set_id TEXT NOT NULL,
+            card_number TEXT NOT NULL,
+            qty INTEGER NOT NULL CHECK(qty > 0),
+            cost_per_unit REAL NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'TWD',
+            fx_rate_to_twd REAL NOT NULL,
+            cost_per_unit_twd REAL NOT NULL,
+            grade TEXT,
+            note TEXT,
+            purchase_date TEXT NOT NULL,
+            cost_locked INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pf_batches_user ON portfolio_batches(user_id, set_id, card_number)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pf_batches_tcg ON portfolio_batches(user_id, tcg)")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS portfolio_sells (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            batch_id INTEGER,
+            set_id TEXT NOT NULL,
+            card_number TEXT NOT NULL,
+            tcg TEXT NOT NULL DEFAULT 'pokemon',
+            qty INTEGER NOT NULL CHECK(qty > 0),
+            sell_price_per_unit REAL NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'TWD',
+            fx_rate_to_twd REAL NOT NULL,
+            sell_price_per_unit_twd REAL NOT NULL,
+            realized_pnl_twd REAL NOT NULL,
+            sell_date TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (batch_id) REFERENCES portfolio_batches(id) ON DELETE SET NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pf_sells_user ON portfolio_sells(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pf_sells_card ON portfolio_sells(user_id, set_id, card_number)")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS listings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
