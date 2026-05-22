@@ -363,6 +363,29 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cfs_field ON card_field_sources(field_name)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cfs_source ON card_field_sources(source_name)")
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pokemon_dict (
+            id INTEGER PRIMARY KEY,
+            name_en TEXT,
+            name_jp TEXT,
+            romaji TEXT,
+            name_zh TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS jp_term_dict (
+            name_jp     TEXT PRIMARY KEY,
+            name_en     TEXT NOT NULL,
+            category    TEXT,
+            confidence  REAL,
+            sources     TEXT,
+            raw_lookup  TEXT,
+            name_zh     TEXT,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     conn.close()
 
