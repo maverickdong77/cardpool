@@ -2338,71 +2338,23 @@ async def auth_register_verify(payload: dict = Body(...)):
 
 @app.post("/api/auth/register")
 async def auth_register(payload: dict = Body(...)):
-    email = (payload.get("email") or "").strip().lower()
-    password = payload.get("password", "")
-    display_name = payload.get("display_name")
-    phone = (payload.get("phone") or "").strip()
-    phone_code = (payload.get("phone_code") or "").strip()
+    """[DEPRECATED 2026-05-22] 舊「手機驗證碼」註冊已淘汰、改用 email 驗證碼兩階段流程：
+    - POST /api/auth/register-request：寄驗證碼到 email
+    - POST /api/auth/register-verify：輸入驗證碼 + 建帳號
+    """
+    raise HTTPException(
+        status_code=410,
+        detail="此端點已淘汰、請改用 /api/auth/register-request + /api/auth/register-verify",
+    )
 
-    # 1. 格式驗證
-    if not PHONE_RE.match(phone):
-        raise HTTPException(status_code=400, detail="無效手機號碼")
-    if not _re_phone.fullmatch(r"\d{6}", phone_code):
-        raise HTTPException(status_code=400, detail="無效驗證碼格式")
-
-    # 2. 重複檢查（在驗證碼消耗前先擋掉）
-    import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
-        if await (await db.execute("SELECT id FROM users WHERE email=?", (email,))).fetchone():
-            raise HTTPException(status_code=409, detail="此 email 已註冊")
-        if await (await db.execute("SELECT id FROM users WHERE phone=?", (phone,))).fetchone():
-            raise HTTPException(status_code=409, detail="此手機號碼已被註冊")
-
-    # 3. 簡訊驗證碼（消耗一次）
-    if not await _verify_phone_code(phone, phone_code):
-        raise HTTPException(status_code=400, detail="驗證碼錯誤或已過期")
-
-    # 4. 建帳號
-    user = await auth_mod.create_user(email, password, display_name)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE users SET phone=?, phone_verified=1 WHERE id=?",
-            (phone, user["id"]),
-        )
-        await db.commit()
-    user["phone"] = phone
-    user["phone_verified"] = 1
-    token = await auth_mod.create_session(user["id"])
-    return {"user": user, "token": token}
-
-
-# ===== 忘記 email：用手機查並把 email 簡訊給註冊手機 =====
 
 @app.post("/api/auth/find-email")
 async def auth_find_email(payload: dict = Body(...)):
-    """以手機查 email、回傳一律是 ok（不洩漏存在性）
-    若該手機有註冊 → 把對應 email 簡訊到這支手機
-    payload: {phone}
-    """
-    phone = (payload.get("phone") or "").strip()
-    out = {"ok": True, "message": "若該手機已註冊，email 已簡訊發送至此號碼"}
-    if not PHONE_RE.match(phone):
-        return out
-    import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT email FROM users WHERE phone=?", (phone,))
-        row = await cur.fetchone()
-        if not row:
-            return out  # 不洩漏
-        email = row[0]
-    # TODO: 接真實 SMS provider；正式環境 phone 才看得到 email，避免全 email 被截獲
-    print(f"[SMS] {phone} → 您在卡波註冊的 email：{email}")
-    if _is_dev_mode():
-        # dev：回 masked email + 完整給開發者測試
-        masked = _mask_email(email)
-        out["dev_email"] = email
-        out["dev_masked"] = masked
-    return out
+    """[DEPRECATED 2026-05-22] 現在不再用手機註冊、email 直接就是登入帳號、不需要此端點"""
+    raise HTTPException(
+        status_code=410,
+        detail="此端點已淘汰、email 就是登入帳號、無需手機找回",
+    )
 
 
 def _mask_email(e: str) -> str:
