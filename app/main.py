@@ -1879,6 +1879,16 @@ _REGIONAL_PREFIXES = [
 ]
 _TEAM_ROCKET_PREFIX = 'ロケット団の'  # → "Team Rocket's"
 
+# JP→ZH 地區形 prefix（連寫無空格、user 偏好「阿羅拉小拉達」格式）
+_REGIONAL_PREFIXES_ZH = [
+    ('ガラル ', '伽勒爾'),
+    ('アローラ ', '阿羅拉'),
+    ('ヒスイ ', '洗翠'),
+    ('パルデア ', '帕底亞'),
+    ('ガラルの', '伽勒爾'),
+    ('ヒスイの', '洗翠'),
+]
+
 
 async def _translate_jp_card_name_to_en(card_name_jp: str, db) -> str | None:
     """JP→EN multi-rule translation.
@@ -1976,6 +1986,97 @@ async def _translate_jp_card_name_to_en(card_name_jp: str, db) -> str | None:
     if suffix:
         parts.append(suffix)
     return ' '.join(parts)
+
+
+async def _translate_jp_card_name_to_zh(card_name_jp, db):
+    """JP→ZH 翻譯（per-pokemon 對映、跨 set 通用）。
+
+    順序：HTML strip → 人物の → メガ → 地區形 → 後綴 → core 查 pokemon_dict / jp_term_dict
+         → 全名 fallback → 組合（所有飾詞跟 core 之間連寫無空格）。
+    """
+    if not card_name_jp:
+        return None
+
+    raw = card_name_jp.strip()
+    is_mega = bool(_MEGA_HTML_RE.search(raw))
+    name = _HTML_TAG_RE.sub('', raw).strip()
+
+    # 人物の prefix（查 jp_term_dict 拿中文人名）
+    char_prefix_zh = None
+    if 'の' in name:
+        cut = name.index('の')
+        char_jp = name[:cut]
+        rest = name[cut + 1:].strip()
+        if char_jp and rest:
+            cur = await db.execute(
+                "SELECT name_zh FROM jp_term_dict WHERE name_jp = ? LIMIT 1", (char_jp,)
+            )
+            row = await cur.fetchone()
+            if row and row[0]:
+                char_prefix_zh = row[0] + '的'
+                name = rest
+
+    # Mega
+    if name.startswith('メガ'):
+        is_mega = True
+        name = name[2:].strip()
+
+    # 地區形（連寫無空格）
+    regional_zh = None
+    for prefix, label in _REGIONAL_PREFIXES_ZH:
+        if name.startswith(prefix):
+            regional_zh = label
+            name = name[len(prefix):].strip()
+            break
+
+    # 後綴抽取
+    m = _CARD_SUFFIX_RE.search(name)
+    suffix = m.group(0) if m else ''
+    core = (name[:-len(suffix)] if suffix else name).strip()
+
+    zh_core = None
+    if core:
+        if _JP_CHAR_RE.search(core):
+            cur = await db.execute(
+                "SELECT name_zh FROM pokemon_dict WHERE name_jp = ? LIMIT 1", (core,)
+            )
+            row = await cur.fetchone()
+            if row and row[0]:
+                zh_core = row[0]
+            else:
+                cur = await db.execute(
+                    "SELECT name_zh FROM jp_term_dict WHERE name_jp = ? LIMIT 1", (core,)
+                )
+                row = await cur.fetchone()
+                if row and row[0]:
+                    zh_core = row[0]
+
+    # 全名 fallback
+    if not zh_core:
+        cur = await db.execute(
+            "SELECT name_zh FROM jp_term_dict WHERE name_jp = ? LIMIT 1", (raw,)
+        )
+        row = await cur.fetchone()
+        if row and row[0]:
+            zh_core = row[0]
+            char_prefix_zh = None
+            is_mega = False
+            regional_zh = None
+            suffix = ''
+
+    if not zh_core:
+        return None
+
+    out = ''
+    if char_prefix_zh:
+        out += char_prefix_zh
+    if is_mega:
+        out += 'Mega'
+    if regional_zh:
+        out += regional_zh
+    out += zh_core
+    out += suffix
+    return out
 
 
 # 2026-05-22: PSA-label query format mapping。賣家 eBay listing title 直接抄 PSA label 的字、
