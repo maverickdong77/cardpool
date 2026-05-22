@@ -1,10 +1,28 @@
 import sqlite3
 import aiosqlite
+import json
 from datetime import datetime
 from typing import Optional
 import os
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cards.db")
+
+_JP_ZH_LOOKUP = {}
+_jp_zh_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "_jp_zh_translations.json")
+if os.path.exists(_jp_zh_path):
+    try:
+        with open(_jp_zh_path, encoding="utf-8") as _f:
+            _JP_ZH_LOOKUP = json.load(_f)
+        print(f"[jp_zh] 載入 {len(_JP_ZH_LOOKUP)} 條 JP→ZH 翻譯")
+    except Exception as _e:
+        print(f"[jp_zh] 載入失敗：{_e}")
+
+
+def _norm_card_num_for_zh(s):
+    if s is None:
+        return ""
+    s = str(s).strip().lstrip("#").split("/")[0]
+    return s.lstrip("0") or "0"
 
 
 def init_db():
@@ -156,6 +174,20 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Email 驗證碼（流程 A：先驗證才註冊、暫存註冊資料）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS email_verifications (
+            email TEXT PRIMARY KEY,
+            code TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            display_name TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_email_verifications_expires ON email_verifications(expires_at)")
 
     # 忘記密碼 token
     cursor.execute("""
@@ -771,7 +803,8 @@ async def get_cards_by_set(set_id: str) -> list:
                 if u and u.startswith("/"):
                     r["image_url"] = "https://www.pokemon-card.com" + u
                 r["name"] = r.get("name_jp")
-                r["name_zh"] = None
+                cn_key = _norm_card_num_for_zh(r.get("card_number"))
+                r["name_zh"] = _JP_ZH_LOOKUP.get(f"{set_id}/{cn_key}")
                 r["language"] = "jp"
             return rows
 
