@@ -48,8 +48,27 @@ async def daily_backfill_loop():
 # ========== 內部 helper(Task 3+ 實作)==========
 
 async def allocate_new_pg(set_code: str) -> int:
-    """分配新 pg。Task 3 實作。"""
-    raise NotImplementedError("Task 3")
+    """分配新 pg。
+
+    普通擴充包(set_code 不以 -P 結尾):取 1-999 區段現有 max + 1
+    Promo set(以 -P 結尾):取 9100+ 區段現有 max + 1(避開既有 9001-9099)
+    """
+    is_promo = set_code.endswith('-P') or set_code.endswith('-PROMO')
+    async with aiosqlite.connect(DB_PATH) as db:
+        if is_promo:
+            row = await (await db.execute(
+                "SELECT MAX(CAST(pg AS INTEGER)) FROM jp_card_list_set "
+                "WHERE CAST(pg AS INTEGER) >= 9100"
+            )).fetchone()
+            current_max = row[0] if row[0] else 9099
+            return max(9100, current_max + 1)
+        else:
+            row = await (await db.execute(
+                "SELECT MAX(CAST(pg AS INTEGER)) FROM jp_card_list_set "
+                "WHERE CAST(pg AS INTEGER) < 9000"
+            )).fetchone()
+            current_max = row[0] if row[0] else 0
+            return current_max + 1
 
 
 async def detect_dead_running_jobs():
