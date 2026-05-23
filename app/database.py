@@ -363,6 +363,24 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_volume_7d ON card_volume_stats(sales_7d DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_volume_30d ON card_volume_stats(sales_30d DESC)")
 
+    # ========== set_backfill_jobs：補卡盒任務排隊表（2026-05-24 加）==========
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS set_backfill_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            set_code TEXT NOT NULL,
+            source_hint TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            started_at TIMESTAMP,
+            finished_at TIMESTAMP,
+            cards_scraped INTEGER DEFAULT 0,
+            cards_translated INTEGER DEFAULT 0,
+            error_msg TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sbj_status ON set_backfill_jobs(status, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sbj_set_code ON set_backfill_jobs(set_code)")
+
     # ========== card_list 加 SNKR 即時掛單欄位（idempotent ALTER）==========
     for col, typ in [
         ("snkr_listing_count", "INTEGER"),
