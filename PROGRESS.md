@@ -44,6 +44,8 @@
 - **PowerShell 5.1 對無 BOM 的 UTF-8 .ps1 用 cp950 讀檔、中文 comment / 字串變亂碼 + parser error**：5/22 深夜寫 `check_traditional_chinese.ps1` 撞到 — Write tool 預設無 BOM、PS 5.1 用系統 ANSI codepage (cp950) 解碼 UTF-8 中文 → ConvertFrom-Json 撞 unexpected token / Missing expression after ','。**修法**：寫 .ps1 用 `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]$true)` 顯式加 BOM。**驗證**：`Get-Item file -> ReadAllBytes()[0..2]` 應該是 `EF BB BF`。未來寫含中文的 PowerShell script 都要這樣處理。
 - **Python `.strip()` 會剝全形空格 `　`、DB lookup key 不含 trailing 全形空格**：5/22 深夜跑 _translate_jp_card_name_to_zh 最後 1 條 miss 撞到 — `"裂空の訪問者デオキシス　".strip()` → 剝掉 trailing 全形空格、剩 `"裂空の訪問者デオキシス"`、但 jp_term_dict 內條目含 trailing 全形空格、query `WHERE name_jp = ?` miss。**修法**：寫進 jp_term_dict 時兩個 key 都寫（含 + 不含 trailing 全形空格）、或函式內顯式 strip(' \t\n\r　') 後再查。**通則**：跨 Python ↔ SQLite 比對日文字串、要意識到 `.strip()` 剝 unicode whitespace（含全形空格）、會造成 key mismatch。
 - **「メガXXX」可能是寶可夢名本身、不是 Mega 進化前綴**：5/22 深夜 _translate_jp_card_name_to_zh 撞到 — `メガヤンマ` (#469 Yanmega 遠古巨蜓) / `メガニウム` (#154 Meganium 大竺葵) 整個 jp 名就是寶可夢、不是「メガ + ヤンマ」進化前綴。舊邏輯剝 メガ 前綴後查 pokemon_dict「ヤンマ」找不到（pokemon_dict 是「ヤンヤンマ」#193）、整個 None。**修法**：在剝 メガ 前 save `name_pre_mega`、core 查不到時用 `name_pre_mega` 抽完 suffix 整名查 pokemon_dict、命中就不剝 Mega 飾詞。`_test_translate_zh.py` 加 3 條 case 驗證（メガヤンマ → 遠古巨蜓 / メガニウム → 大竺葵 / メガヤンマex → 遠古巨蜓ex）。**通則**：jp prefix 跟 base 寶可夢名衝突（如 メガ / カラ / ブラック 等開頭詞）要在 prefix 處理前先試整名查 pokemon_dict。
+- **eBay query 三個 anti-bot trigger（已升級 CLAUDE.md eBay query 段落 v2）**：5/22 PSA-label 升級時 ablation 確認三個 trigger：(1) `_sop=13` + `_ipg=240` + `_in_kw=4` 三個 param 合一起會 trigger splashui challenge wall、任兩個過、三個合一起擋；(2) `-` 連字號在 _nkw query 也 trigger splashui（賣家標題用 `M4-NINJA SPINNER`、但 query 必須改空格 `M4 NINJA SPINNER`、eBay search 內部 hyphen/space 都 match）；(3) `POKEMON` keyword 是 trust signal、拿掉會被擋。**細節見 `CLAUDE.md` 的「eBay query / post-filter 設計（2026-05-22 v2 PSA-label 規格）」段落**。
+- **API process silent crash（無 traceback）**：5/22 凌晨 + 18:20 各撞 1 次 — `run_api.py` 跑著跑著 process 突然不見、port 8000 空、無 stack trace、output log 只到正常 200 OK 訊息就斷。可能 root cause：(a) Playwright sync API 累積 resource leak（每 sync_ebay launch fresh chromium、long backfill 累積）、(b) Windows OS silent kill（記憶體不足？watcher 訊號？）、(c) 某種 unhandled exception 沒寫進 log。**對 driver 影響**：driver 有 retry 1 次 + 10s backoff、API 死 < 60s 時自動撐過、API 死 > 60s 時連續 N 卡 fail 但不誤標 synced（pending 留 NULL、可後續手動補抓）。**未來對策**：(a) 加 background health monitor 每 60s curl 一次、API 死 → 自動重啟、(b) 改 backend Playwright 從 sync API in asyncio 重寫為純 async（減 thread / resource leak、CLAUDE.md 提到的 `~5 小時 hang` 應該同根源）。
 
 ---
 
@@ -918,6 +920,66 @@ PreToolUse on AskUserQuestion、偵測簡體 / 日文整段 / 英文整段、有
 - **可選 B**：前端搜尋頁 / 分類頁顯示中文（需改 `..\卡波\index.html` cardItemHtml render 用 state.lang、或設預設 jp）
 - **可選 C**：commit 累積的非 JP→ZH 改動（app/main.py line 1341 COALESCE set_name / CLAUDE.md / scraper 等 pre-existing 修改）
 - **可選 D**：回原本 5/22 早上方向 — Portfolio Phase 6 端到端測試 / eBay 架構決策 / MVP auth KYC
+
+### 2026-05-22
+
+#### 完成
+
+**1. eBay backend scraper 救活（推翻 5/21「enterprise anti-bot 全救不了」結論）**
+- 02:38 用 playwright MCP probe sold-listings URL → 不再 splashui redirect、IP-level flag 已解或降階
+- 用 backend force sync 949/110 仍 0 row（Pitfall #16 fingerprint 偵測）
+- 三個 param ablation 找出 trigger：`_sop=13` + `_ipg=240` + `_in_kw=4` 任兩個過、三個合一起 splashui 擋
+- 拿掉 `_sop=13`（最低功能損失）→ 949/110 force sync 0 → **576 row 救活**
+
+**2. PSA-label query 格式升級（user 規格 v2）**
+- `app/scraper/ebay.py:_build_url` 改新格式：`{year} POKEMON JAPANESE {set_code_en} {set_name_en} {rarity_full} {card_name UPPER} PSA {grade}`
+- 範例：`2025 POKEMON JAPANESE M2 Inferno X SPECIAL ART RARE MEGA CHARIZARD X EX PSA 10`
+- 過程中再拿掉 `_in_kw=4`（user 觀察「引號」副作用、實測 listings 55 → 260 = 4.7x 升）
+- `app/main.py` 加兩個 dict：
+  - `_PG_TO_EBAY_INFO`（5 個 pg：949 M2 Inferno X / 950 M2a MEGA Dream ex / 951 MC Start Deck 100 Battle Collection / 952 M3 Munikis Zero / 953 M4 Ninja Spinner、含 release_year）
+  - `_RARITY_TO_EBAY`（SAR→"SPECIAL ART RARE" / SR→"SUPER RARE" / UR / AR / RR / HR / CHR / SSR / CSR / MUR 共 10 種高稀有度全名映射）
+- 拿掉 Query B 日文名 query（新 query 已用「POKEMON JAPANESE」target JP listings）
+- `search_by_card_name` / `get_ebay_prices` signature 加 `set_code_en` / `set_name_en` / `release_year` / `rarity_full` 4 個參數
+- backup files：`app/scraper/ebay.py.before-sop-removal-20260522` / `app/main.py.before-psa-label-query-20260522` / `_backfill_all_jp_ebay.py.before-rate-limit-20260522`
+
+**3. Driver 加 rate limit + 全量 1,282 卡 backfill 跑完 21.3 hr**
+- `_backfill_all_jp_ebay.py` 加 `RATE_LIMIT_BASE_SEC=60` + `RATE_LIMIT_JITTER_SEC=20`、每卡最少 60±20s 間隔（含 sync 時間）
+- 全量跑 1,282 卡（pg 949/950/951/952/953）：02:21 → 23:41
+- 1,280 ok / 2 fail（951/757 ニャオハex + 950/6 アゲハント、都普卡、漏抓影響 ~0）
+- DB row 寫入 +1,812（108,404 → 110,216）
+- 中途 API silent crash 1 次（18:20、無 traceback、自救活）
+- 0 次 splashui anti-bot trigger 全程
+- spot-check：949/110 SAR Mega Charizard X ex 58 row / 949/114 SAR Mega Lopunny ex 39 row / 950/234 SAR Pikachu ex 18 row、listing_title 完美 match PSA label 格式
+
+**4. CLAUDE.md 更新 eBay query 段落為 2026-05-22 v2**
+- 替換過時 2026-05-17 v1 段落
+- 補：PSA-label 規格 + 範例 + 三個 param trigger 警告 + `-` 連字號 trigger + POKEMON trust signal + `_PG_TO_EBAY_INFO` / `_RARITY_TO_EBAY` dict 位置與用途
+
+**5. 列高稀有度 0 row 清單供 user 手動 verify（普卡省略、user 偏好）**
+- 953 M4 Ninja Spinner：3 張高稀有度 0 row
+- 952 M3 Munikis Zero：18 張
+- 950 M2a MEGA Dream ex：33 張
+- 949 M2 Inferno X：17 張
+- 951 MC：0 張（reprint set 無高稀有度）
+- **共 71 張**待 user 手動 eBay 驗證 false negative（user verify 後若發現有資料、回頭針對該卡 micro-adjust query）
+
+#### 進行中
+
+- **待 user verify 71 張高稀有度 0 row 卡**：如發現某些卡實際 eBay 有資料、要 micro-adjust query 格式
+- **2 張 fail 卡未補抓**：951/757 + 950/6（都普卡、可選擇手動 force sync 補）
+
+#### 踩到的坑（新 Pitfalls 已加上方）
+
+- 詳見 Known Pitfalls 區段新加 4 條（eBay 三個 param trigger / `-` 連字號 trigger / POKEMON trust signal / API silent crash）
+- 「Driver saved=N ≠ DB row 寫入」這個之前已存在的 Pitfall #14 今天再次驗證（誤差 5-150 row）
+
+#### 明天的下一步
+
+1. **(等 user) verify 71 張高稀有度 0 row 卡** — 如發現某些卡實際 eBay 有資料、針對該卡的真實 listing title 模式 micro-adjust query
+2. **補抓 2 張 fail 卡**：`curl POST /api/prices/sync_ebay/951/757` + `curl POST /api/prices/sync_ebay/950/6`
+3. **(待 user 決定) 詳情頁加「JP 詳細資料」按鈕**：改 app/main.py 加 jp_card_id 欄位、改 卡波\index.html 加按鈕。URL pattern：`https://www.pokemon-card.com/card-search/details.php/card/{cardID}/regu/all`。預計 15 分鐘
+4. **(待 user 決定) 規劃「熱門卡片」feature 補抓 SAR/SR/UR 漏抓卡**：例如 953 cn 84-114（PSA label 上的 SAR 卡編號超出 jp_card_list 的 max cn=83）。User 之前表達「之後在熱門卡片這裡補充」
+5. **(可選) 建 `/empty-cards <pg>` 或 `/scrape-status` Skill**：把今天列 0 row 清單 / monitor row 進度的重複流程包成 slash command（insights 報告建議）
 
 ---
 
