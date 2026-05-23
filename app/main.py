@@ -1341,7 +1341,8 @@ async def get_card_prices(set_id: str, card_number: str):
                 SELECT jcl.cardID,
                        jcl.name_jp,
                        ('https://www.pokemon-card.com' || jcl.thumb_url) AS image_url,
-                       jcl.rarity, jcl.set_code, jcl.set_name_jp AS set_name,
+                       jcl.rarity, jcl.set_code,
+                       COALESCE(jcls.name_jp, jcl.set_name_jp) AS set_name,
                        jcl.hp, jcl.illustrator, jcl.card_number,
                        jcl.types_json, jcl.attacks_json, jcl.weakness,
                        jcl.resistance, jcl.retreat_cost, jcl.regulation_mark,
@@ -1355,10 +1356,11 @@ async def get_card_prices(set_id: str, card_number: str):
             jrow = await cur_jp.fetchone()
             if jrow:
                 card_name = jrow["name_jp"] or ""
+                _name_zh_fb = await _translate_jp_card_name_to_zh(jrow["name_jp"], db)
                 card_meta = {
                     "name": None,
                     "name_jp": jrow["name_jp"],
-                    "name_zh": None,
+                    "name_zh": _name_zh_fb,
                     "image_url": jrow["image_url"],
                     "rarity": jrow["rarity"],
                     "rarity_ocr": None,
@@ -1382,6 +1384,15 @@ async def get_card_prices(set_id: str, card_number: str):
                     "retreat_cost": jrow["retreat_cost"],
                     "regulation_mark": jrow["regulation_mark"],
                 }
+
+        # JP set 補翻譯：若 name_zh 為空、用 _translate_jp_card_name_to_zh 算（path 1 / path 2 共用）
+        if card_meta and not card_meta.get("name_zh") and card_meta.get("name_jp"):
+            sid_lower = (set_id or "").lower()
+            is_jp_set = sid_lower.startswith("jp-") or (sid_lower.isdigit() and len(sid_lower) >= 3)
+            if is_jp_set:
+                _zh_fb = await _translate_jp_card_name_to_zh(card_meta["name_jp"], db)
+                if _zh_fb:
+                    card_meta["name_zh"] = _zh_fb
 
         # 取得價格歷史
         # 只回必要欄位，省 payload (省 listing_title 等大 text 一半 size)
