@@ -45,7 +45,18 @@
 - **Python `.strip()` 會剝全形空格 `　`、DB lookup key 不含 trailing 全形空格**：5/22 深夜跑 _translate_jp_card_name_to_zh 最後 1 條 miss 撞到 — `"裂空の訪問者デオキシス　".strip()` → 剝掉 trailing 全形空格、剩 `"裂空の訪問者デオキシス"`、但 jp_term_dict 內條目含 trailing 全形空格、query `WHERE name_jp = ?` miss。**修法**：寫進 jp_term_dict 時兩個 key 都寫（含 + 不含 trailing 全形空格）、或函式內顯式 strip(' \t\n\r　') 後再查。**通則**：跨 Python ↔ SQLite 比對日文字串、要意識到 `.strip()` 剝 unicode whitespace（含全形空格）、會造成 key mismatch。
 - **「メガXXX」可能是寶可夢名本身、不是 Mega 進化前綴**：5/22 深夜 _translate_jp_card_name_to_zh 撞到 — `メガヤンマ` (#469 Yanmega 遠古巨蜓) / `メガニウム` (#154 Meganium 大竺葵) 整個 jp 名就是寶可夢、不是「メガ + ヤンマ」進化前綴。舊邏輯剝 メガ 前綴後查 pokemon_dict「ヤンマ」找不到（pokemon_dict 是「ヤンヤンマ」#193）、整個 None。**修法**：在剝 メガ 前 save `name_pre_mega`、core 查不到時用 `name_pre_mega` 抽完 suffix 整名查 pokemon_dict、命中就不剝 Mega 飾詞。`_test_translate_zh.py` 加 3 條 case 驗證（メガヤンマ → 遠古巨蜓 / メガニウム → 大竺葵 / メガヤンマex → 遠古巨蜓ex）。**通則**：jp prefix 跟 base 寶可夢名衝突（如 メガ / カラ / ブラック 等開頭詞）要在 prefix 處理前先試整名查 pokemon_dict。
 - **eBay query 三個 anti-bot trigger（已升級 CLAUDE.md eBay query 段落 v2）**：5/22 PSA-label 升級時 ablation 確認三個 trigger：(1) `_sop=13` + `_ipg=240` + `_in_kw=4` 三個 param 合一起會 trigger splashui challenge wall、任兩個過、三個合一起擋；(2) `-` 連字號在 _nkw query 也 trigger splashui（賣家標題用 `M4-NINJA SPINNER`、但 query 必須改空格 `M4 NINJA SPINNER`、eBay search 內部 hyphen/space 都 match）；(3) `POKEMON` keyword 是 trust signal、拿掉會被擋。**細節見 `CLAUDE.md` 的「eBay query / post-filter 設計（2026-05-22 v2 PSA-label 規格）」段落**。
+- **pokellector 主頁只列已被收藏者掃描的卡（不是 set 全部卡）**：5/24 補爬 mep Black Star Promos 撞到 — set 標 81 卡、pokellector set 主頁實列 40 卡（編號 1-28 / 32-33 / 64-67 / 69 / 74-77 / 79、其餘 41 張因「未掃描」不顯示）。**結論**：pokellector 適合作 image source（已掃描卡有高解析圖）、不適合作完整 card name source。要完整 card list 用 Bulbapedia 的 `MEP_Black_Star_Promos_(TCG)` 表格（含 1-88 編號 + 9 個 TBA 編號 = 75 命名卡）。**合併策略**：Bulbapedia 卡名 / 編號為基底、pokellector image 對應編號補進去、缺圖的 35 張先 NULL 等未來 pokellector 收齊或 pokemontcg.io 收錄。
+- **前端 in-memory `cacheStore` 不被 page reload 自動清光**：5/24 補爬 me4 + mep 後撞到 — backend API 已回新 set 數、但前端切「英文版」仍顯示舊數字（4 而非 6）。Root cause：`cacheStore['sets:en']` 在某些情況（如 SPA hash navigate + state 未變）會保留前次 fetch 結果、`navigate(url)` 不一定 trigger 清除。**修法**：開發 / debug 時 evaluate `for (const k of Object.keys(cacheStore)) delete cacheStore[k]` 強清、再 renderSets()。**production / user 端**：不會撞、因為 user 切「日文版↔英文版」會跳 `setLang(...)` → `navigate('sets')` 是 full re-fetch、cacheStore 在 view re-render 不被讀取。但 user 若用 hash 直跳 `#/sets` 不切 lang、可能看到 stale。**長期**：應該在 INSERT 新 set 後 server-side 觸發版本 invalidation（如加 Last-Modified header + If-Modified-Since match）；現階段先把這個 case 記住。
 - **API process silent crash（無 traceback）**：5/22 凌晨 + 18:20 各撞 1 次 — `run_api.py` 跑著跑著 process 突然不見、port 8000 空、無 stack trace、output log 只到正常 200 OK 訊息就斷。可能 root cause：(a) Playwright sync API 累積 resource leak（每 sync_ebay launch fresh chromium、long backfill 累積）、(b) Windows OS silent kill（記憶體不足？watcher 訊號？）、(c) 某種 unhandled exception 沒寫進 log。**對 driver 影響**：driver 有 retry 1 次 + 10s backoff、API 死 < 60s 時自動撐過、API 死 > 60s 時連續 N 卡 fail 但不誤標 synced（pending 留 NULL、可後續手動補抓）。**未來對策**：(a) 加 background health monitor 每 60s curl 一次、API 死 → 自動重啟、(b) 改 backend Playwright 從 sync API in asyncio 重寫為純 async（減 thread / resource leak、CLAUDE.md 提到的 `~5 小時 hang` 應該同根源）。
+- **jp_term_dict batch 自譯 name_zh 有錯位 row、要 prefix 系列 audit**：5/22 user 跑 batch 自譯時 dict mapping + heuristic 對部分 row 誤命中、特定 row name_zh 完全錯位（5/24 audit 發現 3 條真錯位：かがやくリザードン → 寫成「夢幻ex」應該「光輝噴火龍」/ かがやくゲッコウガ → 寫成「比比鳥」/ かがやくフーディン → 寫成「大比鳥ex」）。**通則**：batch 自譯後要對「prefix 系列」(かがやく / メガ / ガラル / アローラ / ヒスイ / パルデア / ヒカリ / ロケット団 等)、寫 audit script 比對「name_zh 是否以該前綴對應中文開頭」(光輝/超級/伽勒爾/阿羅拉 等)、不符合的列出檢查。**注意 false positive**：「メガヤンマex」(遠古巨蜓ex) 看似 メガ 前綴但是寶可夢名本身、不是 Mega 進化、audit 要區分（CLAUDE.md 已收這條 Pitfall）。
+- **artofpkm romaji 規則雙規則並存、reverse decode 不穩**：5/24 撞到 — artofpkm_cards.romaji_name 對寶可夢卡用「PIKACHUU」(CHU 拼正常 IME)、對 trainer 卡用「JIXYUN」(IME 寬鬆模式拗音用 XYA/XYU/XYO)、雙規則並存。pokemon_dict.romaji 已對齊 artofpkm 規則、能 JOIN 8,107 條。但對 trainer/item 用 reverse decode (artofpkm romaji → katakana) quality ~70%（katakana 缺漢字 + 拗音歧義）、不能直接寫 DB。**結論**：jp 名 fallback 要 wiki verify、不能完全靠 reverse decode。今晚 v8 跑完 926 張、user 看 quality 不滿 revert。
+- **DB UPDATE 不需重啟 backend、但 browser 可能 cache API response**：DB 改動直接反應到下次 API request、不像 backend code 改動要重啟。但 browser memory cache 對同 URL response 可能 cache、要 hard reload (`?nocache=Date.now()` query string) 才看到新值。playwright `nav` 帶 nocache 是好習慣。
+- **cardItemHtml 已從「括號格式」改成「兩行式」、用 .ci-name + .ci-name-zh 兩個 div**：5/24 撞到 — 我以為 cardItemHtml 顯「日文 (中文)」括號格式（依老 source code）、實際已被改成「主標 .ci-name 大字日 + 副標 .ci-name-zh 小字中」兩行式。playwright evaluate 只抓 `.ci-name` selector 漏看副標、誤判「沒顯中文」。修 render-related bug 前要先 source code 看一下、不能假設老版邏輯。
+- **state.catId reload 後殘留**：5/24 撞到 — 直接 reload `#/category?kind=character` 但前 session state.catId='1'、parseHash 沒清 → renderCategory 走 cards 分支撈 character_id=1 報錯。修補：renderCategory 開頭看 hashParams.get('id') 沒值就 reset state.catId=null。**通則**：navigate(view, params) 改 hash 時、若 URL 沒帶某 key、state 對應欄位應該重設、不能信任前 session 殘留。
+- **eBay query 沒 set context → precision ≈ 0%（跨 set 同名污染）**：5/24 撞到 — user 提的 v3 query「Japan {name} {rarity} PSA 10」對 RR 等同名跨 set 多的卡撈到 240+ 但全是其他 set 同名卡（Teal Mask Ogerpon ex M2a #17 RR 應撈的、結果撈到 PRE EN / SV8a #201 SAR / Prismatic 177 等全跨 set）。**通則**：eBay query 對「卡名常見、編號常 reprint」的寶可夢卡、缺 set context 就會撈 90%+ 跨 set 污染。修法：query 必加 `set_name_en` 或 `set_code_en`（PSA label v2 規格已加、見 CLAUDE.md eBay 段落）。實證 v2「Japan {set_name_en} {name} {rarity} PSA 10」listings 第 1 筆即鎖對 set。**未來新 query 設計要先確認 set context token 在 query 內**、不要假設 name + rarity 足夠 narrow。
+- **backup 檔（`*.before-*`）跟 git HEAD 對不起來時、不能用 backup 拆 commit**：5/24 拆 commit 撞到 — ebay.py 有 3 個 `.before-*` backup（signin-fix / stealth-fix / sop-removal）、本想依時序重放各拆 1 commit、但 `diff -q git HEAD vs before-signin-fix-20260520` 顯示 differ、表示 HEAD 跟 backup 之間就有未記錄改動、依 backup 重放會產生 broken 中間狀態（commit history 跑不起來的 code）。**修法**：放棄精準時序拆、改用「一檔合一 commit、commit message 註明累積 N 波改動」、git blame 仍可從 commit message grep 出哪波。**未來通則**：要靠 `.before-*` 拆 commit 前、先 `diff git HEAD vs backup` 確認 backup == HEAD 該 file。對不起來就放棄拆、合一個 commit 訊息詳註。
+- **driver 的 `pending=N` log 是 LIMIT 後的 `len(rows)`、不是 query 全集數量、會誤導**：5/24 撞到 — `_recrawl_high_rarity_ebay.py --limit 3` 跑出 log `pending (high-rarity + 0 row)=3`、user 一看以為「全 DB 只 3 卡 pending」、其實全 DB 是 1,848 卡。**修法**：driver log 應該分開印 `total_query_match=N`（不含 LIMIT、完整 gating SQL count）+ `pending_for_this_run=M`（含 LIMIT、實際進 queue 數）。**未來寫 driver 都要遵循**、不只印一個 `pending=N` 容易混淆。
+- **SQL JOIN 兩張表都有同名欄要 alias prefix（否則 SQLite 報 `ambiguous column name`）**：5/24 撞到 — `SELECT name_jp FROM jp_card_list JOIN jp_card_list_set` → `sqlite3.OperationalError: ambiguous column name: name_jp`。修法：用 alias prefix（`jcl.name_jp` / `jcls.name_jp`）。**基本 SQL 但每次跨表 query 都會忘**、特別 jp_card_list 跟 jp_card_list_set 都有 `name_jp` 欄、最容易撞。寫 cross-table SELECT 時都加 alias 不會錯。
 
 ---
 
@@ -980,6 +991,170 @@ PreToolUse on AskUserQuestion、偵測簡體 / 日文整段 / 英文整段、有
 3. **(待 user 決定) 詳情頁加「JP 詳細資料」按鈕**：改 app/main.py 加 jp_card_id 欄位、改 卡波\index.html 加按鈕。URL pattern：`https://www.pokemon-card.com/card-search/details.php/card/{cardID}/regu/all`。預計 15 分鐘
 4. **(待 user 決定) 規劃「熱門卡片」feature 補抓 SAR/SR/UR 漏抓卡**：例如 953 cn 84-114（PSA label 上的 SAR 卡編號超出 jp_card_list 的 max cn=83）。User 之前表達「之後在熱門卡片這裡補充」
 5. **(可選) 建 `/empty-cards <pg>` 或 `/scrape-status` Skill**：把今天列 0 row 清單 / monitor row 進度的重複流程包成 slash command（insights 報告建議）
+
+### 2026-05-24
+
+#### 完成
+
+**1. 拆 commit + 整理 untracked（13 個 commit）**
+- 5/19~5/22 累積 tracked 改動 (10 檔 / +895 / −678 行) + untracked 一堆
+- 序列：`e89b22e` chore(gitignore) 補 pattern → `96e37ed` 刪 static/ → `1e4a069` scraper(snkrdunk) cross-set 污染修復 → `2cbcc59` scraper(browser_pool) stealth+recycle → `f18b832` scraper(ebay) 三波累積 → `916fd9e` main JP 翻譯 fallback → `83f29e4` feat jp_detail_crawl_v2.py → `1c466cc` docs JP set 對照表 → `a8d016f` docs(spec) wiki pokedex → `9a78e14` docs(plan) 5 個 plans → `20c2446` docs(claude) 主檔 6 段 → `4bfd58b` docs(claude) 編碼準則 → `246cf63` docs(progress) 5/22 第 8 session
+- 過去舊報告檔（CHANGELOG / DAY_*_RESULT / TRANSLATION_REVIEW_BATCH×6 / 一堆 _*.png/.jpeg/.md/.jsonl / app/*.before-* / snkrdunk.db）加進 .gitignore、檔留本機
+- 沒底線 .py 三個分類：jp_detail_crawl_v2.py commit（reusable）/ check_logo.py / query_tw_sets.py 加 .gitignore（ad-hoc query）
+- RECOVERY_2026-05-10.md 純空白改動 revert 掉、不 commit
+
+**2. eBay 71 張高稀有度 0-row verify 視覺化頁**
+- 寫 `_verify_71_query.py` 撈 71 張（5 個 set: 949/950/951/952/953）+ markdown 表格
+- 寫 `_verify_71_html.py` 視覺化 HTML：卡圖 grid + 標記按鈕（×有 / ✓零）+ 改英文名 + localStorage 持久化 + 匯出 markdown 回報
+- 啟 `python -m http.server 8081` 給 user 看：`http://127.0.0.1:8081/_verify_71.html`
+- user 自己 verify 完 949 set (17 張)、結果保留 localStorage 自己處理
+
+**3. user 提新 query 格式 + dry-run 比對**
+- user 提：`Japan {name} {rarity} PSA 10`（更精簡、沒 set context）
+- 寫 `_recrawl_54_new_query.py`、playwright sync + stealth、對剩 54 張（950/952/953）dry-run 3 張
+- v1（沒 set name）：撈 242 筆但 precision ≈ 0%、全跨 set 同名污染（其他 set 的同名卡）
+- user 提「加 set name 試試看」→ v2 query：`Japan {set_name_en} {name} {rarity} PSA 10`
+- v2 dry-run 同 3 張：listings 第 1 筆鎖到對的 set (M2a)、但 RR PSA 10 卡市場本身少
+- 確認方向：跑全 54 張 v2 query + 視覺化、user 自己視覺判斷
+
+**4. 跑全 54 張 v2 query + 視覺化（user 視覺判斷流程）**
+- background launch `_recrawl_54_new_query.py`（rate limit 30s/卡 × 54 ≈ 27 min）
+- 寫 `_recrawl_54_html.py`：產 `_recrawl_54.html`、fetch JSON 動態載入（user 按重整即看新進度、不用我重新產 HTML）
+- 每張卡 grid 左右兩欄：左半卡圖 + 卡資訊 + 標記按鈕；右半 5 個 sample listing（縮圖 + 標題 + 價格 + eBay 連結）、含 PSA 10 listing 用紅底框標示
+- 跑完 user 看：只有 1 張漏抓 **950/199 AR コダック (Psyduck)**
+
+**5. 寫 8 筆 listings 進 card_prices（用兩階段流程：先 report 後寫 DB）**
+- backup `cards.db.before-psyduck-insert-20260524`（815MB）
+- Filter sample 8 個 listings：全部含「PSA 10」+「199/193 + M2a」+ 排除其他評級 = 8/8 通過
+- 反推價格：NT$ ÷ 32 = USD、TWD 直接存 sample 值
+- INSERT 8 筆全成功、UNIQUE 0 dup、前端 API `/api/prices/950/199` 200 OK
+- 現有 row: ebay 8 筆 + snkrdunk 464 筆
+
+**6. 全 jp_card_list 高稀有度 0-row 重爬啟動（背景）**
+- user 提醒「目前應該只爬幾個熱門 set 的價格」 → query 確認：jp_card_list 全 21,550 卡 ebay_prices_synced_at 都 NOT NULL（已嘗試過）、但實際有 row 的只 3,075 (14.3%)、78.9% 雙 source 都 0
+- 列選項：近 3 年高稀有度 / 近 5 年高稀有度 / 全部高稀有度
+- user 選「全部高稀有度 1,848 卡 + 60 秒/卡 = ~30 hr」
+- 寫 `_recrawl_high_rarity_ebay.py`（複製 `_backfill_all_jp_ebay.py` 改 gating：高稀有度 + NOT EXISTS card_prices ebay row）
+- backup `cards.db.before-recrawl-high-rarity-20260524`（815MB）
+- dry-run 3 張：跑的是 953 那 3 張（user 已 verify 真 0）、saved=0 預期、driver/backend OK
+- background launch Task ID `bt090k8t5`、預估明天 ~08:00 跑完
+
+#### 進行中
+
+- **背景跑：1,848 張高稀有度 0-row 重爬**（PSA-label v2 query、60s/卡）。預估 hit rate ~1.4%（按 5/22 5 set 樣本推算）→ 預期新增 ~20-30 row。明天看結果。
+- **未補抓 2 張 5/22 fail**：951/757 ニャオハex + 950/6 アゲハント（普卡、影響小）。
+
+#### 踩到的坑（新加進上方 Known Pitfalls）
+
+- **eBay query 沒 set context → precision ≈ 0%（跨 set 同名污染）**：v3 query「Japan {name} {rarity} PSA 10」對 RR 等同名跨 set 多的卡撈到 240+ 但全是其他 set 的同名卡。修法：query 必加 `set_name_en` 或 `set_code_en` 做 set context lock。實證 v2「Japan {set_name_en} {name} {rarity} PSA 10」listings 第 1 筆即鎖對 set。
+- **backup 檔（`*.before-*`）跟 git HEAD 對不起來時、不能用 backup 拆 commit**：5/19 PM ebay.py 的 3 個 backup 跟 HEAD `diff -q` 顯示 differ、依 backup 順序重放會撞中間狀態 broken。改用「一檔合一 commit、commit message 註明累積 N 波改動」最穩。原因可能 CRLF 或實際內容差異。
+- **driver `pending=N` log 是 LIMIT 後的 `len(rows)`、會誤導**：`_recrawl_high_rarity_ebay.py --limit 3` 跑出 log `pending (high-rarity + 0 row)=3`、看起來像「全 DB 只 3 卡 pending」、其實全 DB 是 1,848 卡。改 log 規範：應該分開印 `total_query_match=N`（不含 LIMIT）+ `pending_for_this_run=M`（含 LIMIT）。
+- **SQL JOIN 兩張表都有同名欄要 prefix（ambiguous column name）**：寫 `SELECT name_jp FROM jp_card_list JOIN jp_card_list_set` → SQLite 報 `ambiguous column name: name_jp`。修法用 alias prefix（`jcl.name_jp` / `jcls.name_jp`）。基本 SQL 但每次都會忘。
+- **`./Python/bin/python.exe` 跑 Python 印中文要 POSIX `PYTHONIOENCODING=utf-8 ./Python/...`、不是 PowerShell `$env:PYTHONIOENCODING="utf-8"; ./Python/...`**：5/20 Pitfall 已寫、今天 git bash 環境再次驗證（PS 語法在 bash 變 command not found、中文輸出亂碼）。
+
+#### 明天的下一步
+
+1. **早上 /today 第一件事**：看背景 `_recrawl_high_rarity_ebay.log` 進度
+   ```powershell
+   Get-Content _recrawl_high_rarity_ebay.log -Tail 20
+   PYTHONIOENCODING=utf-8 ./Python/bin/python.exe -c "import sqlite3; print(sqlite3.connect('cards.db').execute(\"SELECT COUNT(*) FROM card_prices WHERE source='ebay'\").fetchone()[0])"
+   ```
+2. **若 1,848 跑完**（明天清晨）：
+   - 統計新增多少 row、hit rate vs 預期 ~1.4%
+   - 抽 spot-check 10 張新撈到的卡確認 precision
+   - 若 hit rate 顯著高於預期 → 考慮擴大重爬到「近 5 年含普卡 7,724 卡」（64 hr）
+3. **若中途 hang**（~5 hr 風險、CLAUDE.md Known Pitfalls）：
+   - kill background + 用 `_resilient_backfill.ps1` wrapper 重啟（自動 detect idle hang + restart）
+   - 或改 gating 為 `NOT EXISTS card_prices` 自動續跑
+4. **(可選) 補抓 2 張 5/22 fail 卡**：`curl -X POST http://127.0.0.1:8000/api/prices/sync_ebay/951/757` + `/950/6`
+5. **(可選) 收尾 71 張視覺化**：localStorage 在 user 瀏覽器、若想保留 verify 紀錄、按頁面「匯出待回報清單」存下來
+6. **延續未動方向**：Portfolio Phase 2 後端 API (2-3 hr) / MVP S1 auth KYC (2-4 hr) / GoldenGem Phase A 自選頁 (2-3 hr)
+
+### 2026-05-24（下午到深夜）— 分類頁 SPA + jp 名 backfill 8 輪
+
+延續早上方向 — 整天大工程、從零建分類頁 + 解 jp 卡顯英文名怪組合的問題。
+
+#### 完成
+
+**1. 分類頁 SPA 從零建（前端 `..\卡波\index.html` 7 處改動 + CSS）**
+- Header 加「📚 分類」入口（line 706）
+- parseHash + navigate 支援 `kind` / `catId` 參數
+- state 加 `kind / catId` 預設
+- 新 helper：`goCategory(kind)` / `goCategoryDetail(kind, catId)`
+- 新 view code：`renderCategory` 主 + `renderPokemonList` / `renderCharacterList` / `renderCategoryCards` 子函式
+- CSS 加 `.pokedex-grid` / `.pokedex-item` / `.cat-tabs` / `.cat-entry-card` 樣式
+- 入口設計：先用 mockup html (`_pokedex_mockup.html`) 給 user 比較 3 種 PokeAPI 圖源 × 2 配色、user 選「B official-artwork + 亮色」
+
+**2. 寶可夢分類頁（1,025 隻按 9 個世代分區）**
+- 用 PokeAPI CDN sprite（`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/{id}.png`）
+- 後端 `category_pokemon_list` 加 `name_zh` 欄位（pokemon_dict 5/22 已 100% 補中文）
+- 前端顯示中文當主名、英 / 日當副名
+
+**3. 角色分類頁（358 人）**
+- 用 character_dict.image_url（artofpkm 頭像）、失效 URL fallback 成人形 SVG icon
+
+**4. 該分類的卡片清單頁（點寶可夢/角色看出現過的卡）**
+- 加 `language` 參數過濾、解日英版本混合 bug（user 主訴）
+- 後端 SQL `set_id LIKE 'jp-%' OR set_id GLOB '[0-9]*'`(jp) / `'en-%'`(en)
+- 結果：妙蛙種子 jp filter 21 張全日卡、en filter 31 張全英卡、不再混
+
+**5. 順手修一致化（搜尋下拉建議 + 熱門排行頁）**
+- `doSuggest` / `setTrendingWindow` render 邏輯從 `c.name_zh || c.name || c.name_jp` 三選一、改成「日文 (中文)」格式跟搜尋結果 / set 詳情頁一致
+
+**6. jp 卡日文名 backfill 8 輪（解 user「日文卡顯英文當主」訴求）**
+- 起點：card_list 表 27,108 張 jp-* 系列卡中、**24,857 張 (91.7%) name_jp NULL**、cardItemHtml fallback 顯英文 name (如「Bulbasaur (妙蛙種子)」、應該是「フシギダネ (妙蛙種子)」)
+- backup `cards.db.before-jp-name-backfill-20260524-021257` (854MB)
+- 8 輪累計補 **18,212 張**、覆蓋率 8.3% → 75.5%、+67.2pp
+
+| 輪 | 補張數 | 方法 |
+|---|---|---|
+| v1 (`_backfill_jp_name.py`) | 12,613 | pokemon_dict 純名 exact match + V/EX/VMAX 後綴 |
+| v2 (`_backfill_jp_name_v2.py`) | 3,848 | Mega 前綴 / Ho-Oh 連字號 normalize / jp_term_dict trainer 反查 |
+| v3 (`_backfill_jp_name_v3.py`) | 603 | Basic Energy fallback / Pokémon Catcher 正規化 / Team Rocket's 前綴 |
+| v4 (`_backfill_jp_name_v4.py`) | 554 | 地區形（Alolan/Galarian/Paldean/Hisuian）+ M XXX EX Mega 簡寫 + Pokmon 漏 é |
+| v5 (`_backfill_jp_name_v5.py`) | 186 | Romaji 21 條 hardcoded mapping (Hakasenokenkixyuu → 博士の研究 等) |
+| v6 (`_backfill_jp_name_v6` inline) | 145 | artofpkm_cards.romaji_name JOIN pokemon_dict.romaji (UPPER) |
+| v7 (`_backfill_jp_name_v7.py`) | 263 | forward romanize jp_term_dict (~1,198 條能 romanize)、JOIN artofpkm |
+| v8 (`_backfill_jp_name_v8_fixed.py`) | 926 | reverse decode romaji → katakana、quality 70%、user 確認後 revert |
+| **總計** | **17,286** (v8 revert 後) | **75.5%** |
+
+**7. v8 quality 不滿、revert**
+- v8 用 reverse decode artofpkm romaji 補 926 張、但 quality ~70%（katakana 缺漢字、如「シロナノハキ」應該是「シロナの覇気」）
+- user 看到後選 revert v8 + 明天爬 wiki 改補準
+- backup `cards.db.before-romaji-katakana-fallback-030947`
+- Reset SQL：ATTACH 兩 DB JOIN rowid revert 6,645 row name_jp=NULL
+
+**8. jp_term_dict 3 條 row 中文翻譯修正（5/22 batch 自譯時誤命中）**
+- かがやくリザードン (Radiant Charizard)：name_zh 寫成「夢幻ex」❌ → 修「光輝噴火龍」
+- かがやくゲッコウガ (Radiant Greninja)：寫成「比比鳥」❌ → 修「光輝甲賀忍蛙」
+- かがやくフーディン (Radiant Alakazam)：寫成「大比鳥ex」❌ → 修「光輝胡地」
+- audit 其他前綴系列（メガ / ガラル / アローラ / ヒスイ / パルデア / ヒカリ / ロケット団の）8 個全無錯位
+
+**9. 後端 `app/main.py` 改動**
+- `category_pokemon_list`: 加 SELECT name_zh + 回傳 JSON 帶 name_zh
+- `category_pokemon_cards`: 加 `language: str | None = None` 參數 + SQL `lang_filter` 變數 + Python loop fallback「jp 卡 name_jp NULL → 用 pokemon_dict.name_jp 填」+ 翻譯邏輯
+- `category_character_cards`: 加 `language` 參數 + `lang_filter` 變數
+
+#### 進行中 / 待做
+
+- **明天爬 wiki 補剩 2,245 真翻譯缺**：對 537 distinct artofpkm romaji_name 反推 katakana 候選、用 Bulbapedia search 抓 EN/JP name 補進 jp_term_dict、重跑 v7 reverse romanize。預估 1-2 hr。**reverse romanize quality 不穩、需要 wiki verify 才可靠**
+- **後端 `app/main.py` + `app/database.py` + `..\卡波\index.html`（不在 git）改動未 commit**：今晚改動 + 5/22 累積、明天先 review git diff 拆 commit
+- **2,245 真翻譯缺 + 4,400 placeholder「Card N」（artofpkm data 缺漏、補不了）= 共 6,645 NULL**
+
+#### 踩到的坑（已加進上方 Known Pitfalls）
+
+- **jp_term_dict batch 自譯有錯位 row**：5/22 user 跑 batch 自譯時 dict mapping + heuristic 誤命中、特定 row name_zh 完全錯位（かがやくリザードン → 夢幻ex 等）。今天 audit 8 個前綴系列、發現 3 條真錯位、修補。教訓：batch 自譯後要 audit、不能完全信賴 dict mapping fuzzy match
+- **artofpkm romaji 規則不穩定**：寶可夢卡用「PIKACHUU」(CHU 拼正常 IME)、trainer 卡用「JIXYUN」(IME 寬鬆模式拗音用 XYA/XYU/XYO)、雙規則並存。reverse decode 拗音歧義無解、quality 不穩。明天爬 wiki 才能保證 quality
+- **artofpkm 用 ALL CAPS romaji + 漏 é**：jp_term_dict 是「Pokémon」(含 é)、card_list 是「Pokmon」(直接漏 é 變空)。normalize NFKD 也救不到、要寫 special-case「Pokmon → Pokémon」處理
+- **cardItemHtml 已被改成兩行式 (主標日 + 副標中)、不是括號格式**：我 v3 截圖測 selector 抓 `.ci-name` 只到主標、誤判「沒中文」、實際中文在 `.ci-name-zh` 副標。測 render 前要看 source code、不能假設舊版邏輯
+- **DB UPDATE 不需重啟 backend**：DB 改動直接反應到下次 API request、不像 backend code 改動要重啟。但 browser cache 可能存舊 API response、要 hard reload (`?nocache=` query) 才看到新值
+- **state.catId reload 後殘留**：直接 reload `#/category?kind=character` 但前 session state.catId='1'、parseHash 沒清 → renderCategory 走 cards 分支撈 character_id=1 報錯。修補：renderCategory 開頭看 hash 沒帶 id 就 reset state.catId=null
+
+#### 明天的下一步
+
+1. **爬 Bulbapedia trainer/item 補 jp_term_dict + 重跑 v7**：537 distinct romaji × Bulbapedia search + parse `|jname=` → 補進 jp_term_dict → 重 v7 reverse romanize 補 card_list。預估 1-2 hr、補 ~500-1500 張
+2. **拆 commit + 寫 PROGRESS.md**：今晚 backend 改動 + 5/22 累積、明天先 review git diff 拆 4-6 個語意 commit。預估 15 分鐘
+3. **延續未動方向**（看餘裕）：71 張高稀有度 0 row eBay verify / Portfolio Phase 2 後端 API / MVP S1 auth KYC / GoldenGem Phase A 自選頁
 
 ---
 
