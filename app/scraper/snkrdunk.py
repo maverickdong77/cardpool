@@ -24,17 +24,36 @@ def _set_name_variants(s: str) -> list:
     """
     if not s:
         return []
-    out = [s]
-    # メガ ↔ MEGA 互換
-    if s.startswith("メガ"):
-        out.append("MEGA" + s[2:])
-    elif s.startswith("MEGA"):
-        out.append("メガ" + s[4:])
-    # ex 大小寫
-    if "ex" in s:
-        out.append(s.replace("ex", "EX"))
-    if "EX" in s:
-        out.append(s.replace("EX", "ex"))
+    import re as _re  # local import 避免動到模組頂層
+    seeds = [s]
+    # 0. 脫尾部「(中文翻譯)」括號
+    no_paren = _re.sub(r'\s*[（(][^）)]*[）)]\s*$', '', s)
+    if no_paren and no_paren != s:
+        seeds.append(no_paren)
+    # 1. 按空格拆 token、**尾部 token 優先**（避免複合 set 名前綴撞舊 set）
+    tokens_seen = set()
+    all_tokens = []
+    for src in list(seeds):
+        for piece in src.split():
+            if len(piece) >= 4 and piece not in tokens_seen:
+                tokens_seen.add(piece)
+                all_tokens.append(piece)
+    for t in reversed(all_tokens):
+        if t not in seeds:
+            seeds.append(t)
+    out = list(seeds)
+    # 2. メガ ↔ MEGA 互換、ex ↔ EX（套用到所有 seeds）
+    extras = []
+    for v in out:
+        if v.startswith("メガ"):
+            extras.append("MEGA" + v[2:])
+        elif v.startswith("MEGA"):
+            extras.append("メガ" + v[4:])
+        if "ex" in v:
+            extras.append(v.replace("ex", "EX"))
+        if "EX" in v:
+            extras.append(v.replace("EX", "ex"))
+    out.extend(extras)
     # 去重保留順序
     seen = set()
     uniq = []
@@ -47,10 +66,12 @@ def _set_name_variants(s: str) -> list:
 
 def _lookup_apparel_id(card_number: Optional[str],
                         set_name_jp: Optional[str],
-                        card_name_jp: Optional[str]) -> Optional[int]:
+                        card_name_jp: Optional[str],
+                        set_code: Optional[str] = None) -> Optional[int]:
     """從 snkrdunk_mapping 表查 apparel_id。只用於日文 metadata 充足的卡。
 
     對映策略（從嚴到鬆）：
+      0. (set_code, card_number) 精確比對 — 兩邊都用 pokemon-card.com 官方 set code，最準。
       1. set_name_jp + card_number 完全比對（每個 variant 都試）
       2. full_title 含 set_name_jp + card_number
       3. card_name_jp + card_number（同 set 多版本時可能誤命中）
@@ -64,14 +85,29 @@ def _lookup_apparel_id(card_number: Optional[str],
         conn = sqlite3.connect(str(_DB_PATH))
         conn.row_factory = sqlite3.Row
         try:
+            # Stage 0：set_code 精確比對（COLLATE NOCASE 處理大小寫差）。雙方 set_code 命名一致、最準。
+            # 寧缺勿錯：set_code 給了但 mapping 沒對應 → return None、不走 fallback。
+            # 詳細理由見 snkrdunk_http.py:_lookup_apparel_id。
+            if set_code:
+                row = conn.execute(
+                    "SELECT apparel_id FROM snkrdunk_mapping "
+                    "WHERE set_code = ? COLLATE NOCASE AND card_number = ? "
+                    "ORDER BY is_pokemon DESC, apparel_id LIMIT 1",
+                    (set_code, n),
+                ).fetchone()
+                if row:
+                    return row["apparel_id"]
+                return None
+
             variants = _set_name_variants(set_name_jp) if set_name_jp else []
 
+            # 不再強制 is_pokemon=1（同步 snkrdunk_http.py）：classifier 誤標多
             # 1. exact set_name_jp + card_number（試所有變體）
             for v in variants:
                 row = conn.execute(
                     "SELECT apparel_id FROM snkrdunk_mapping "
-                    "WHERE is_pokemon=1 AND set_name_jp=? AND card_number=? "
-                    "ORDER BY apparel_id LIMIT 1",
+                    "WHERE set_name_jp=? AND card_number=? "
+                    "ORDER BY is_pokemon DESC, apparel_id LIMIT 1",
                     (v, n),
                 ).fetchone()
                 if row:
@@ -81,23 +117,33 @@ def _lookup_apparel_id(card_number: Optional[str],
             for v in variants:
                 row = conn.execute(
                     "SELECT apparel_id FROM snkrdunk_mapping "
-                    "WHERE is_pokemon=1 AND card_number=? "
+                    "WHERE card_number=? "
                     "AND full_title LIKE ? "
-                    "ORDER BY apparel_id LIMIT 1",
+                    "ORDER BY is_pokemon DESC, apparel_id LIMIT 1",
                     (n, f"%{v}%"),
                 ).fetchone()
                 if row:
                     return row["apparel_id"]
 
             # 3. card_name_jp + card_number 模糊比對
+            # 如果 caller 給了 set_code、加 set_code 限制、避免跨 set 同名同號污染
             if card_name_jp:
-                row = conn.execute(
-                    "SELECT apparel_id FROM snkrdunk_mapping "
-                    "WHERE is_pokemon=1 AND card_number=? "
-                    "AND (card_name LIKE ? OR full_title LIKE ?) "
-                    "ORDER BY apparel_id LIMIT 1",
-                    (n, f"%{card_name_jp}%", f"%{card_name_jp}%"),
-                ).fetchone()
+                if set_code:
+                    row = conn.execute(
+                        "SELECT apparel_id FROM snkrdunk_mapping "
+                        "WHERE card_number=? AND set_code = ? COLLATE NOCASE "
+                        "AND (card_name LIKE ? OR full_title LIKE ?) "
+                        "ORDER BY is_pokemon DESC, apparel_id LIMIT 1",
+                        (n, set_code, f"%{card_name_jp}%", f"%{card_name_jp}%"),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT apparel_id FROM snkrdunk_mapping "
+                        "WHERE card_number=? "
+                        "AND (card_name LIKE ? OR full_title LIKE ?) "
+                        "ORDER BY is_pokemon DESC, apparel_id LIMIT 1",
+                        (n, f"%{card_name_jp}%", f"%{card_name_jp}%"),
+                    ).fetchone()
                 if row:
                     return row["apparel_id"]
             return None
@@ -439,12 +485,20 @@ async def get_snkrdunk_prices(query: str, is_cert: bool = False, grade: str = "1
                                 card_number: Optional[str] = None,
                                 set_name: Optional[str] = None,
                                 set_name_jp: Optional[str] = None,
-                                card_name_jp: Optional[str] = None) -> list:
+                                card_name_jp: Optional[str] = None,
+                                set_code: Optional[str] = None,
+                                full_history: bool = False) -> list:
     """主入口：2026-05-05 改 delegate 到 httpx 版本（snkrdunk_http），50x 提速。
 
     SNKRDUNK 已暴露公開 JSON API `/v1/apparels/{id}/sales-history`，不需 chromium。
     舊 chromium 版本 (_scrape_snkrdunk_sync / _scrape_by_apparel_id_sync) 保留供
     refresh_snkr.py / backfill_snkr.py 使用，以後可以分階段汰換。
+
+    full_history=True 時 backfill 模式（max_pages=500、抓到第一筆）；
+    False 時即時模式（max_pages=25、~500 筆/卡）。
+
+    set_code: pokemon-card.com 官方 set code、傳入後 _lookup_apparel_id 優先用
+    (set_code, card_number) 精確比對、避免跨 set 同名同號的歷史污染（2026-05-19 修）。
     """
     from app.scraper.snkrdunk_http import get_snkrdunk_prices as _http_get
     try:
@@ -452,6 +506,8 @@ async def get_snkrdunk_prices(query: str, is_cert: bool = False, grade: str = "1
             query, is_cert=is_cert, grade=grade,
             card_number=card_number, set_name=set_name,
             set_name_jp=set_name_jp, card_name_jp=card_name_jp,
+            set_code=set_code,
+            full_history=full_history,
         )
     except Exception as e:
         print(f"[snkrdunk] httpx fallback to chromium due to: {e}")
