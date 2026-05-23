@@ -363,6 +363,33 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_volume_7d ON card_volume_stats(sales_7d DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_volume_30d ON card_volume_stats(sales_30d DESC)")
 
+    # ========== snkr_hot_items：SNKR トレカ・ゲーム 熱門排行（一天爬一次）==========
+    # 每次爬完整批 30 筆、用 fetched_at 區分批次、API 取最新批次前 N 筆顯示。
+    # is_box=1 表示整盒商品（title 不含 [set_code N/T] 卡編號標記）。
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS snkr_hot_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT NOT NULL,
+            rank INTEGER NOT NULL,
+            apparel_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            price_jpy INTEGER,
+            image_url TEXT,
+            is_box INTEGER DEFAULT 0,
+            set_id TEXT,
+            card_number TEXT,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # idempotent ALTER（前一版表沒這兩欄）
+    for col, typ in [("set_id", "TEXT"), ("card_number", "TEXT")]:
+        try:
+            cursor.execute(f"ALTER TABLE snkr_hot_items ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_snkr_hot_batch ON snkr_hot_items(batch_id, rank)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_snkr_hot_fetched ON snkr_hot_items(fetched_at DESC)")
+
     # ========== set_backfill_jobs：補卡盒任務排隊表（2026-05-24 加）==========
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS set_backfill_jobs (
@@ -911,9 +938,11 @@ async def get_cards_by_set(set_id: str) -> list:
                 ORDER BY CAST(REPLACE(REPLACE(number,'a',''),'b','') AS INTEGER)
             """, (set_id,))
             rows = [dict(r) for r in await cursor.fetchall()]
+            from app.main import _translate_en_card_name_to_zh
             for r in rows:
                 r["name_jp"] = None
-                r["name_zh"] = None
+                zh, _ = await _translate_en_card_name_to_zh(r.get("name"), db)
+                r["name_zh"] = zh
                 r["language"] = "en"
             return rows
 

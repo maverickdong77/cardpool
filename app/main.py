@@ -809,6 +809,182 @@ def _parse_snkr_full_title(full_title: str) -> dict:
     return out
 
 
+async def _scrape_snkr_hot_items(limit: int = 30) -> list[dict]:
+    """爬 SNKR トレカ・ゲーム 熱門搜尋頁、解析完整商品資料（含盒子）。
+
+    回傳 list of {rank, apparel_id, title, price_jpy, image_url, is_box}。
+    用 regex parse productTile anchor、不引 BeautifulSoup。
+    """
+    import re
+    import httpx
+    url = ("https://snkrdunk.com/search?keywords=Pokemon+Card+Game+%E3%83%88%E3%83%AC%E3%82%AB"
+           "&searchCategoryIds=6&brandIds=pokemon&sort=hottest&page=1")
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0 Chrome/124"})
+            if r.status_code != 200:
+                return []
+            html = r.text
+    except Exception as e:
+        print(f"[snkr_hot] scrape err: {e}")
+        return []
+
+    pattern = re.compile(
+        r'href="(?:https://snkrdunk\.com)?/apparels/(\d+)"[^>]*aria-label="([^"]+)"[^>]*>([\s\S]*?)</a>',
+        re.IGNORECASE,
+    )
+    items: list[dict] = []
+    seen_ids: set[int] = set()
+    for m in pattern.finditer(html):
+        apparel_id = int(m.group(1))
+        if apparel_id in seen_ids:
+            continue
+        seen_ids.add(apparel_id)
+
+        aria = m.group(2)
+        inner = m.group(3)
+
+        title = aria
+        price_jpy: int | None = None
+        am = re.match(r"^(.+?)\s*-\s*¥([\d,]+)\s*$", aria)
+        if am:
+            title = am.group(1).strip()
+            try:
+                price_jpy = int(am.group(2).replace(",", ""))
+            except ValueError:
+                price_jpy = None
+
+        image_url = None
+        img_m = re.search(r'<img[^>]+src="(https://cdn\.snkrdunk\.com/[^"]+)"', inner)
+        if img_m:
+            image_url = img_m.group(1)
+
+        is_box = 0 if _is_individual_card(title) else 1
+
+        items.append({
+            "rank": len(items) + 1,
+            "apparel_id": apparel_id,
+            "title": title,
+            "price_jpy": price_jpy,
+            "image_url": image_url,
+            "is_box": is_box,
+        })
+        if len(items) >= limit:
+            break
+
+    return items
+
+
+async def _resolve_snkr_title_to_card(db, title: str) -> tuple[str | None, str | None]:
+    """從 SNKR title 解析 [set_code N/T]、反查 jp_card_list 拿 (set_id=pg, card_number)。
+
+    無法解析或 DB 沒收這個 set_code → 回 (None, None)、前端 fallback 跳 SNKR。
+    """
+    import re
+    m = re.search(r"\[\s*([\w-]+)\s+(\d+)(?:/\d+)?\s*\]", title)
+    if not m:
+        return None, None
+    set_code = m.group(1)
+    card_number = str(int(m.group(2)))  # 去前綴 0:"003" -> "3"
+    row = await (await db.execute(
+        "SELECT DISTINCT pg FROM jp_card_list WHERE set_code = ? COLLATE NOCASE LIMIT 1",
+        (set_code,),
+    )).fetchone()
+    if not row:
+        return None, None
+    return row[0], card_number
+
+
+async def _refresh_snkr_hot_items() -> dict:
+    """爬完寫進 snkr_hot_items 表、回傳統計。"""
+    import aiosqlite
+    import uuid
+    items = await _scrape_snkr_hot_items(limit=30)
+    if not items:
+        return {"saved": 0, "error": "scrape returned 0 items"}
+
+    batch_id = uuid.uuid4().hex[:12]
+    mapped_count = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        for it in items:
+            set_id, card_number = await _resolve_snkr_title_to_card(db, it["title"])
+            if set_id:
+                mapped_count += 1
+            await db.execute(
+                """INSERT INTO snkr_hot_items
+                   (batch_id, rank, apparel_id, title, price_jpy, image_url, is_box, set_id, card_number)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (batch_id, it["rank"], it["apparel_id"], it["title"],
+                 it["price_jpy"], it["image_url"], it["is_box"], set_id, card_number),
+            )
+        await db.commit()
+    return {"saved": len(items), "batch_id": batch_id, "mapped_to_db": mapped_count}
+
+
+@app.get("/api/snkr/hot")
+async def get_snkr_hot(limit: int = 10):
+    """前端首頁今日熱門:取最新一批 SNKR 熱門商品前 N 筆(含盒子)。
+
+    自動 24h cache:最新 batch 超過 24 小時或表空就自動重爬,user 訪問首頁
+    時不需手動觸發。
+    """
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        latest_batch = await (await db.execute(
+            "SELECT batch_id, fetched_at FROM snkr_hot_items ORDER BY fetched_at DESC LIMIT 1"
+        )).fetchone()
+
+        need_refresh = False
+        if not latest_batch:
+            need_refresh = True
+        else:
+            age_row = await (await db.execute(
+                "SELECT (julianday('now') - julianday(?)) * 24 AS age_hours",
+                (latest_batch["fetched_at"],),
+            )).fetchone()
+            if age_row and age_row["age_hours"] is not None and age_row["age_hours"] >= 24:
+                need_refresh = True
+
+    if need_refresh:
+        try:
+            await _refresh_snkr_hot_items()
+        except Exception as e:
+            print(f"[snkr_hot] auto-refresh failed: {e}")
+        # 重抓 latest batch
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            latest_batch = await (await db.execute(
+                "SELECT batch_id, fetched_at FROM snkr_hot_items ORDER BY fetched_at DESC LIMIT 1"
+            )).fetchone()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if not latest_batch:
+            return {"items": [], "fetched_at": None, "source": "snkr_hottest"}
+
+        rows = await (await db.execute(
+            """SELECT rank, apparel_id, title, price_jpy, image_url, is_box,
+                      set_id, card_number, fetched_at
+               FROM snkr_hot_items WHERE batch_id=? ORDER BY rank ASC LIMIT ?""",
+            (latest_batch["batch_id"], limit),
+        )).fetchall()
+
+    return {
+        "items": [dict(r) for r in rows],
+        "fetched_at": latest_batch["fetched_at"],
+        "source": "snkr_hottest",
+        "disclaimer": "資料整理自 SNKR 公開 API",
+    }
+
+
+@app.post("/api/admin/snkr-hot/refresh")
+async def refresh_snkr_hot_admin():
+    """手動觸發爬一次 SNKR 熱門寫進 DB(管理員用)。"""
+    result = await _refresh_snkr_hot_items()
+    return result
+
+
 def _normalize_jp_name(s: str) -> str:
     """正規化 set name：去空白、Pokemon↔Pokémon、メガ↔MEGA、ex↔EX"""
     if not s:
@@ -1383,6 +1559,73 @@ async def get_card_prices(set_id: str, card_number: str):
                     "resistance": jrow["resistance"],
                     "retreat_cost": jrow["retreat_cost"],
                     "regulation_mark": jrow["regulation_mark"],
+                }
+
+        # Path 3 fallback: EN set (me4 / mep 等 en_card_list 表的資料、card_list / jp_card_list 都不含)
+        if not card_meta:
+            import json as _json_en
+            cur_en = await db.execute("""
+                SELECT ecl.pokemontcg_id, ecl.name, ecl.rarity, ecl.hp, ecl.artist,
+                       ecl.types, ecl.attacks, ecl.weaknesses, ecl.retreat_cost,
+                       ecl.regulation_mark, ecl.flavor_text,
+                       COALESCE(ecl.image_large_url, ecl.image_small_url) AS image_url,
+                       ecls.name AS set_name, ecls.set_id AS set_code,
+                       ecls.total AS set_total
+                FROM en_card_list ecl
+                LEFT JOIN en_card_list_set ecls ON ecls.set_id = ecl.set_id
+                WHERE ecl.set_id = ? AND ecl.number = ?
+                LIMIT 1
+            """, (set_id, card_number))
+            erow = await cur_en.fetchone()
+            if erow:
+                card_name = erow["name"] or ""
+                # types / attacks 在 en_card_list 是 JSON string、weaknesses 是 array of {type, value}
+                try:
+                    en_types = _json_en.loads(erow["types"]) if erow["types"] else []
+                except Exception:
+                    en_types = []
+                try:
+                    en_attacks = _json_en.loads(erow["attacks"]) if erow["attacks"] else []
+                except Exception:
+                    en_attacks = []
+                try:
+                    en_weak_list = _json_en.loads(erow["weaknesses"]) if erow["weaknesses"] else []
+                except Exception:
+                    en_weak_list = []
+                # 把 weaknesses array 壓成 jp_card_list 風格的 single string (e.g. "Fire×2")
+                en_weakness_str = None
+                if en_weak_list:
+                    w0 = en_weak_list[0] if isinstance(en_weak_list, list) else None
+                    if isinstance(w0, dict):
+                        en_weakness_str = f"{w0.get('type','')}{w0.get('value','')}"
+                # 翻譯 EN→ZH（含 Mega/ex/V/VMAX/VSTAR/GX 飾詞處理）
+                en_name_zh, _en_name_jp_unused = await _translate_en_card_name_to_zh(erow["name"], db)
+                card_meta = {
+                    "name": erow["name"],
+                    "name_jp": None,
+                    "name_zh": en_name_zh,
+                    "image_url": erow["image_url"],
+                    "rarity": erow["rarity"],
+                    "rarity_ocr": None,
+                    "psa_pop10": None, "psa_pop9": None, "psa_pop8": None,
+                    "psa_pop7": None, "psa_pop6": None,
+                    "psa_pop_total": None, "psa_gem_rate": None,
+                    "snkr_listing_count": None, "snkr_min_price_jpy": None,
+                    "snkr_listing_updated_at": None,
+                    "sales_7d": None, "sales_30d": None, "sales_all": None,
+                    "set_name": erow["set_name"],
+                    "set_code": erow["set_code"],
+                    "set_total": erow["set_total"],
+                    "card_number": card_number,
+                    "jp_card_id": None,
+                    "hp": erow["hp"],
+                    "illustrator": erow["artist"],
+                    "types": en_types,
+                    "attacks": en_attacks,
+                    "weakness": en_weakness_str,
+                    "resistance": None,
+                    "retreat_cost": erow["retreat_cost"],
+                    "regulation_mark": erow["regulation_mark"],
                 }
 
         # JP set 補翻譯：若 name_zh 為空、用 _translate_jp_card_name_to_zh 算（path 1 / path 2 共用）
@@ -1997,6 +2240,91 @@ async def _translate_jp_card_name_to_en(card_name_jp: str, db) -> str | None:
     if suffix:
         parts.append(suffix)
     return ' '.join(parts)
+
+
+# 新 set 還沒進 jp_term_dict / pokemon_dict 的特殊翻譯（避免再爬一輪 Bulbapedia）
+# Key: name_en lower、Value: name_zh（繁體中文全名、來源 Bulbapedia Cantonese 全名版）
+_EN_NAME_ZH_OVERRIDE = {
+    'bubbly water energy': '泡沫水能量',
+    'nitro fire energy': '燃料火能量',
+    'magnetic metal energy': '磁鐵鋼能量',
+}
+
+
+async def _translate_en_card_name_to_zh(name_en, db):
+    """EN→ZH 翻譯。四段 fallback：
+    0) _EN_NAME_ZH_OVERRIDE 手動補表（新 set 字典還沒收的）
+    1) pokemon_dict.name_en COLLATE NOCASE 直查
+    2) 剝 'Mega ' 前綴 + ' ex'/' V'/' VMAX'/' VSTAR'/' GX' / ' X' / ' Y' 後綴再查、組回飾詞
+    3) jp_term_dict.name_en 查 trainer / energy / item
+    回傳 (name_zh, name_jp) tuple、找不到回 (None, None)。
+    """
+    if not name_en:
+        return (None, None)
+    name_en = name_en.strip()
+
+    # Step 0: override 手動補表
+    override_zh = _EN_NAME_ZH_OVERRIDE.get(name_en.lower())
+    if override_zh:
+        return (override_zh, None)
+
+    cur = await db.execute(
+        "SELECT name_zh, name_jp FROM pokemon_dict WHERE name_en = ? COLLATE NOCASE LIMIT 1",
+        (name_en,),
+    )
+    row = await cur.fetchone()
+    if row and row["name_zh"]:
+        return (row["name_zh"], row["name_jp"])
+
+    suffix = ''
+    stripped = name_en
+    is_mega = False
+    if stripped.lower().startswith('mega '):
+        is_mega = True
+        stripped = stripped[5:]
+    for suf in (' VMAX', ' VSTAR', ' VUNION', ' GMAX', ' ex', ' EX', ' GX', ' V'):
+        if stripped.endswith(suf):
+            suffix = suf.strip()
+            stripped = stripped[:-len(suf)]
+            break
+    # Mega Charizard X / Mega Charizard Y / Mega Mewtwo X / Mega Mewtwo Y 特殊形態
+    # 必須是 Mega 前綴才剝 X/Y、避免誤剝其他 ' X' 結尾的卡名（pokemon 名極少以 X/Y 結尾）
+    if is_mega and not suffix and (stripped.endswith(' X') or stripped.endswith(' Y')):
+        suffix = stripped[-1]  # 保留大寫 X / Y
+        stripped = stripped[:-2]
+    if stripped != name_en:
+        cur = await db.execute(
+            "SELECT name_zh, name_jp FROM pokemon_dict WHERE name_en = ? COLLATE NOCASE LIMIT 1",
+            (stripped,),
+        )
+        row = await cur.fetchone()
+        if row and row["name_zh"]:
+            zh_parts = []
+            if is_mega:
+                zh_parts.append('超級')
+            zh_parts.append(row["name_zh"])
+            if suffix:
+                # X / Y 形態保持大寫；ex / v / vmax 等飾詞用小寫
+                zh_parts.append(suffix if suffix in ('X', 'Y') else suffix.lower())
+            zh_full = ''.join(zh_parts)
+            jp_parts = []
+            if is_mega:
+                jp_parts.append('メガ')
+            jp_parts.append(row["name_jp"] or '')
+            if suffix:
+                jp_parts.append(suffix if suffix in ('X', 'Y') else suffix.lower())
+            jp_full = ''.join(jp_parts)
+            return (zh_full, jp_full)
+
+    cur = await db.execute(
+        "SELECT name_zh, name_jp FROM jp_term_dict WHERE name_en = ? COLLATE NOCASE LIMIT 1",
+        (name_en,),
+    )
+    row = await cur.fetchone()
+    if row and row["name_zh"]:
+        return (row["name_zh"], row["name_jp"])
+
+    return (None, None)
 
 
 async def _translate_jp_card_name_to_zh(card_name_jp, db):
@@ -3063,15 +3391,15 @@ async def category_character_detail(char_id: int):
 
 @app.get("/api/category/pokemon/list")
 async def category_pokemon_list():
-    """所有寶可夢清單"""
+    """所有寶可夢清單（含中文名）"""
     import aiosqlite
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
-            "SELECT id, name_en, name_jp FROM pokemon_dict ORDER BY id"
+            "SELECT id, name_en, name_jp, name_zh FROM pokemon_dict ORDER BY id"
         )).fetchall()
         return [
-            {"id": r["id"], "name_en": r["name_en"], "name_jp": r["name_jp"]}
+            {"id": r["id"], "name_en": r["name_en"], "name_jp": r["name_jp"], "name_zh": r["name_zh"]}
             for r in rows
         ]
 
@@ -3109,13 +3437,14 @@ async def category_character_list():
 
 
 @app.get("/api/category/pokemon/{pkm_id}/cards")
-async def category_pokemon_cards(pkm_id: int):
-    """某寶可夢出現過的卡（依英文名 / 日文名 contain 比對）"""
+async def category_pokemon_cards(pkm_id: int, language: str | None = None):
+    """某寶可夢出現過的卡（依英文名 / 日文名 contain 比對）。
+    language='jp' / 'en' 過濾語言版本（前端 lang tab 帶入）；None=全語言"""
     import aiosqlite
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT name_en, name_jp FROM pokemon_dict WHERE id=?", (pkm_id,)
+            "SELECT name_en, name_jp, name_zh FROM pokemon_dict WHERE id=?", (pkm_id,)
         )
         pkm = await cur.fetchone()
         if not pkm:
@@ -3123,10 +3452,18 @@ async def category_pokemon_cards(pkm_id: int):
 
         name_en = pkm["name_en"]
         name_jp = pkm["name_jp"]
+        name_zh = pkm["name_zh"]
+
+        # 語言過濾：jp = jp-* 老卡 + 純數字 set_id (jp_card_list 新卡)；en = en-* 卡
+        lang_filter = ""
+        if language == "jp":
+            lang_filter = " AND (cl.set_id LIKE 'jp-%' OR cl.set_id GLOB '[0-9]*')"
+        elif language == "en":
+            lang_filter = " AND cl.set_id LIKE 'en-%'"
 
         # 詞邊界比對：純名（exact）+ 前後接空白 + 中日文模糊
         # 不加 exact match 會漏掉純名「Bulbasaur」這類 (現在 cl.name 大多是純名沒後綴)
-        sql = """
+        sql = f"""
             SELECT cl.set_id, cs.name AS set_name, cs.name_jp AS set_name_jp,
                    cl.card_number, cl.name, cl.name_jp, cl.name_zh, cl.image_url, cl.rarity
             FROM card_list cl
@@ -3135,6 +3472,7 @@ async def category_pokemon_cards(pkm_id: int):
                    OR cl.name LIKE ? OR cl.name LIKE ? OR cl.name LIKE ?
                    OR cl.name_jp LIKE ?)
               AND cl.image_url IS NOT NULL
+              {lang_filter}
             ORDER BY cs.release_date DESC, cl.set_id, CAST(cl.card_number AS INTEGER)
             LIMIT 1000
         """
@@ -3148,21 +3486,28 @@ async def category_pokemon_cards(pkm_id: int):
         out_rows = [dict(r) for r in rows]
         for r in out_rows:
             sid = r.get("set_id") or ""
-            if sid.startswith("jp-") and r.get("name_jp"):
+            is_jp_set = sid.startswith("jp-") or (sid and sid[0].isdigit())
+            # jp 卡若 name_jp NULL → 用該寶可夢 pokemon_dict.name_jp 填補
+            # （避免 cardItemHtml 顯示「Bulbasaur (妙蛙種子)」這種日英混淆的主名）
+            if is_jp_set and not r.get("name_jp") and name_jp:
+                r["name_jp"] = name_jp
+            # 翻譯：jp 卡套用 _translate_jp_card_name_to_zh
+            if is_jp_set and r.get("name_jp"):
                 zh = await _translate_jp_card_name_to_zh(r.get("name_jp"), db)
                 if zh:
                     r["name_zh"] = zh
 
         return {
-            "pokemon": {"id": pkm_id, "name_en": name_en, "name_jp": name_jp},
+            "pokemon": {"id": pkm_id, "name_en": name_en, "name_jp": name_jp, "name_zh": name_zh},
             "count": len(out_rows),
             "cards": out_rows,
         }
 
 
 @app.get("/api/category/character/{char_id}/cards")
-async def category_character_cards(char_id: int):
-    """某訓練家/角色出現過的卡"""
+async def category_character_cards(char_id: int, language: str | None = None):
+    """某訓練家/角色出現過的卡。
+    language='jp' / 'en' 過濾語言版本；None=全語言"""
     import aiosqlite
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -3175,7 +3520,14 @@ async def category_character_cards(char_id: int):
 
         name_en = ch["name_en"]
         name_jp = ch["name_jp"]
-        sql = """
+
+        lang_filter = ""
+        if language == "jp":
+            lang_filter = " AND (cl.set_id LIKE 'jp-%' OR cl.set_id GLOB '[0-9]*')"
+        elif language == "en":
+            lang_filter = " AND cl.set_id LIKE 'en-%'"
+
+        sql = f"""
             SELECT cl.set_id, cs.name AS set_name, cs.name_jp AS set_name_jp,
                    cl.card_number, cl.name, cl.name_jp, cl.name_zh, cl.image_url, cl.rarity
             FROM card_list cl
@@ -3184,6 +3536,7 @@ async def category_character_cards(char_id: int):
                    OR cl.name LIKE ? OR cl.name LIKE ? OR cl.name LIKE ?
                    OR cl.name_jp LIKE ?)
               AND cl.image_url IS NOT NULL
+              {lang_filter}
             ORDER BY cs.release_date DESC, cl.set_id, CAST(cl.card_number AS INTEGER)
             LIMIT 1000
         """
