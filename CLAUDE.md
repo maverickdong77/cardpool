@@ -223,3 +223,68 @@ $pid_=(netstat -ano | findstr ":8000 .*LISTENING").Split()[-1]; taskkill /F /PID
 - **UI / 視覺改動「邊做邊看」原則**（2026-05-22 升級）：implementation 階段遇到任何 UI 改動（layout / modal / 圖示 / 顏色 / 表格 / 元件 / 視覺風格 等）、優先順序是「先做可看的 mockup → user 看 → 確認 OK 才進下個 phase」。具體做法：(a) inline write code、playwright 截 screenshot 發給 user 看、(b) 或 push 到 visual companion 給 user 點選。**不要「寫一大堆 code 後 user 才看」**。MVP / 開發階段尤其適用。複雜 UI 一次截多張 screenshot 比較。實證：今天 portfolio 功能用此流程跑、寫 1 段 UI 截圖 → user 看 → 改 → 再截 → ... 反覆 6-7 輪、最終出來的 UI 完全對齊 user 心目中的、沒有「做完才發現方向錯」的浪費。
 - **長時 backfill 跑完每個卡盒系列、自動列高稀有度 0 row 卡清單給 user verify**（2026-05-22 確立）：每個 set（pg）跑完後、列出該 set 中 `ebay_prices_synced_at IS NOT NULL` 但 `card_prices` 0 row 的高稀有度卡（SAR / SR / UR / AR / RR / HR / CHR / SSR / CSR / MUR）給 user 手動 eBay 搜尋 verify。表格欄位：**卡號 / 稀有度 / 日文名 / 英文名**。**普卡（C / U / R / 無標示）省略**（賣家很少送 PSA 10、列出 100+ 張 user 也難逐張 verify、列了反而干擾）。user 收到後手動驗證、如果發現某張卡實際 eBay 有資料 → 表示我們 query 設計仍有 false negative、回頭針對該卡的真實 listing title 模式 micro-adjust query。實證：5/22 跑 5 pg 共 1,282 卡、列 71 張高稀有度 0 row 給 user verify。**未來其他 backfill（EN 卡表 / 新 set / 重 sync 等）都適用此流程**。
 
+## 編碼行為準則
+
+降低常見 LLM 寫程式錯誤的行為準則。與專案特定指令合併使用。
+
+**權衡**：這些準則偏向謹慎而非速度。對瑣碎任務、用判斷力。
+
+### 1. 先想再寫
+
+**不要猜想。不要藏起困惑。把權衡攤開來說。**
+
+實作前：
+- 明確說出你的假設。不確定就問。
+- 如果存在多種解讀、列出來 — 不要默默自己選。
+- 如果有更簡單的方法、講出來。值得時就 push back。
+- 如果有不清楚的、停下來。指出哪裡讓你困惑、問。
+
+### 2. 簡單優先
+
+**用解決問題所需的最少 code。沒有臆測性的東西。**
+
+- 不做沒被要求的 feature。
+- 不為單次使用的 code 做抽象。
+- 不做沒被要求的「彈性」或「可配置性」。
+- 不為不可能發生的情境做錯誤處理。
+- 如果你寫了 200 行但可以是 50 行、重寫。
+
+問自己：「資深工程師會說這太複雜嗎？」如果會、就簡化。
+
+### 3. 外科手術式改動
+
+**只動你必須動的。只清你自己造成的爛攤子。**
+
+編輯既有 code 時：
+- 不要「順手改善」相鄰的 code、註解、或格式。
+- 不要 refactor 沒壞的東西。
+- 配合既有風格、即使你會用別的方式寫。
+- 如果你發現無關的 dead code、講出來 — 不要刪。
+
+當你的改動造成 orphans（孤兒 import / 變數 / 函式）：
+- 移除 **你的** 改動讓它們變成 unused 的東西。
+- 沒被要求就不要移除既有的 dead code。
+
+測試方式：每一行改動都該能直接 trace 回使用者的需求。
+
+### 4. 目標驅動執行
+
+**定義成功條件。Loop 到驗證通過為止。**
+
+把任務轉成可驗證的目標：
+- 「加 validation」→「對不合法 input 寫 test、再讓它通過」
+- 「修 bug」→「寫一個重現 bug 的 test、再讓它通過」
+- 「Refactor X」→「確認改前改後 test 都過」
+
+多步任務、先列簡短 plan：
+```
+1. [步驟] → 驗證：[檢查]
+2. [步驟] → 驗證：[檢查]
+3. [步驟] → 驗證：[檢查]
+```
+
+強的成功條件讓你能獨立 loop。弱的條件（「讓它 work」）需要不停 clarify。
+
+---
+
+**這些準則生效的徵兆**：diff 裡不必要的改動變少、因為過度複雜要重寫的次數變少、clarifying questions 在實作前出現而非在錯了之後。
