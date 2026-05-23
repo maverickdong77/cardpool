@@ -28,6 +28,7 @@ Thumbs.db
 
 # === Log / PID / 執行紀錄 ===
 *.log
+*.log.*
 *.err
 *.pid
 
@@ -108,3 +109,51 @@ _*.sql
 write_changelog.py
 write_next_day.py
 *.ps1
+
+# === 5/19~5/22 累積 untracked pattern 補擋 ===
+
+# AI agent 暫存目錄
+.superpowers/
+.playwright-mcp/
+
+# 底線檔額外副檔名（_*.py/.html/.txt/.jpg/.json/.ps1/.sql 已 cover）
+_*.png
+_*.jpeg
+_*.md
+_*.jsonl
+_*.py.*
+_*.json.*
+_*/
+
+# app/ 下 backup 檔
+app/*.before-*
+app/**/*.before-*
+
+# cards.db 後續備份（before-* 已 cover）
+cards.db.after-*
+
+# 獨立資料庫
+snkrdunk.db
+
+# 過去工作報告（PROGRESS.md 為權威紀錄）
+CHANGELOG_*.md
+DAY_*_RESULT.md
+TRANSLATION_REVIEW_BATCH*.md
+
+# ad-hoc 截圖 / mockup
+portfolio-*.png
+set9001_*.png
+set9002_*.png
+set949_*.png
+set952_*.png
+set9001_*.md
+set9002_*.md
+set949_*.md
+set952_*.md
+verify_*.png
+miss_translate_*.png
+wiki_form_changes.md
+
+# ad-hoc query 腳本（純 query 用、不進 repo）
+check_logo.py
+query_tw_sets.py
