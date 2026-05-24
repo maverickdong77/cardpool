@@ -390,6 +390,59 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_snkr_hot_batch ON snkr_hot_items(batch_id, rank)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_snkr_hot_fetched ON snkr_hot_items(fetched_at DESC)")
 
+    # ========== snkr_box_items：SNKR 盒裝商品 mapping (2026-05-25 加) ==========
+    # apparel_id = SNKR 商品 ID (跟單卡 mapping 同 namespace 但 box 走自己的表方便管理)
+    # box_type: 'expansion_box' / 'high_class_pack' / 'special_box' / 'starter_deck' / 'reinforcement_pack' / 'pack' / 'other'
+    # default_size_id: SNKR sales-chart endpoint 用的 size 參數 (對應「1個」單盒, 不是 batch)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS snkr_box_items (
+            apparel_id INTEGER PRIMARY KEY,
+            title TEXT NOT NULL,
+            set_name_jp TEXT,
+            box_type TEXT,
+            image_url TEXT,
+            default_size_id INTEGER,
+            min_price_jpy INTEGER,
+            last_synced_at TIMESTAMP,
+            first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_box_set_name ON snkr_box_items(set_name_jp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_box_type ON snkr_box_items(box_type)")
+
+    # ========== snkr_box_prices：SNKR 盒裝歷史成交價 (2026-05-25 加) ==========
+    # 對應 SNKR /v1/apparels/{id}/sales-history endpoint 拿到的歷次成交記錄
+    # UNIQUE 鍵防止重複 sync 寫多次相同記錄
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS snkr_box_prices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            apparel_id INTEGER NOT NULL,
+            size_id INTEGER NOT NULL,
+            price_jpy INTEGER NOT NULL,
+            sale_date_relative TEXT,
+            sale_timestamp_ms INTEGER,
+            buyer_icon_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(apparel_id, size_id, sale_timestamp_ms, price_jpy)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_box_prices_apparel ON snkr_box_prices(apparel_id, size_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_box_prices_ts ON snkr_box_prices(sale_timestamp_ms DESC)")
+
+    # ========== snkr_box_chart_points：SNKR 盒裝走勢圖點 (2026-05-25 加) ==========
+    # 對應 SNKR /v1/apparels/{id}/sales-chart endpoint 的 points 陣列 [[ts, price], ...]
+    # 每次 sync overwrite (老資料 DELETE WHERE apparel_id + size_id 後重 INSERT)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS snkr_box_chart_points (
+            apparel_id INTEGER NOT NULL,
+            size_id INTEGER NOT NULL,
+            ts_ms INTEGER NOT NULL,
+            price_jpy INTEGER NOT NULL,
+            PRIMARY KEY (apparel_id, size_id, ts_ms)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_box_chart_apparel ON snkr_box_chart_points(apparel_id, size_id)")
+
     # ========== set_backfill_jobs：補卡盒任務排隊表（2026-05-24 加）==========
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS set_backfill_jobs (
