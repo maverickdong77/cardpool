@@ -12,7 +12,7 @@ if sys.platform == "win32":
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 # LINE Bot 用 lazy import：環境裡 linebot.v3 可能在某些情況卡住 import，
 # 為了不讓 server 卡 startup，改在 /webhook 端點被打時才載入。
@@ -983,6 +983,225 @@ async def refresh_snkr_hot_admin():
     """手動觸發爬一次 SNKR 熱門寫進 DB(管理員用)。"""
     result = await _refresh_snkr_hot_items()
     return result
+
+
+# ==================== SNKR 盒裝商品 box endpoints (2026-05-25) ====================
+# 對應 snkr_box_items / snkr_box_prices / snkr_box_chart_points 三表
+# SNKR Vue SPA 背後 JSON API:
+#   GET /v1/apparels/{id}/sales-chart?range=all&salesChartOptionId={size_id}
+#   GET /v1/apparels/{id}/sales-history?page=1&per_page=20&size_id={size_id}
+
+async def _fetch_box_sales_chart(apparel_id: int, size_id: int | None = None) -> dict | None:
+    """fetch SNKR sales-chart JSON. size_id=None 時用 SNKR 預設 (回 salesChartOption[0] 對應「1個」)。"""
+    import httpx
+    url = f"https://snkrdunk.com/v1/apparels/{apparel_id}/sales-chart"
+    params = {"range": "all"}
+    if size_id is not None:
+        params["salesChartOptionId"] = str(size_id)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code != 200:
+                return None
+            return r.json()
+    except Exception as e:
+        print(f"[box] sales-chart err apparel={apparel_id}: {e}")
+        return None
+
+
+async def _fetch_box_sales_history(apparel_id: int, size_id: int, per_page: int = 20) -> dict | None:
+    import httpx
+    url = f"https://snkrdunk.com/v1/apparels/{apparel_id}/sales-history"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                url,
+                params={"page": "1", "per_page": str(per_page), "size_id": str(size_id)},
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if r.status_code != 200:
+                return None
+            return r.json()
+    except Exception as e:
+        print(f"[box] sales-history err apparel={apparel_id}: {e}")
+        return None
+
+
+@app.post("/api/box/{apparel_id}/sync")
+async def sync_box_prices(apparel_id: int):
+    """抓 SNKR 對該盒裝商品的歷史價 + 走勢圖、寫進 snkr_box_prices + snkr_box_chart_points。
+
+    第一次 sync 時：從 sales-chart 回的 salesChartOption[0].id 取「1個」對應的 size_id
+    存進 snkr_box_items.default_size_id；之後用該 size_id sync。
+    """
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (await db.execute(
+            "SELECT default_size_id FROM snkr_box_items WHERE apparel_id=?", (apparel_id,)
+        )).fetchone()
+        if not row:
+            return {"error": "apparel_id not in snkr_box_items", "apparel_id": apparel_id}
+        size_id = row[0]
+
+    # 第一次 sync (size_id 還沒存) — 先 fetch chart 不帶 size_id、從 salesChartOption[0] 拿
+    if size_id is None:
+        chart = await _fetch_box_sales_chart(apparel_id, size_id=None)
+        if not chart:
+            return {"error": "first-call sales-chart failed", "apparel_id": apparel_id}
+        opts = chart.get("salesChartOption", [])
+        if not opts:
+            return {"error": "no salesChartOption in chart", "apparel_id": apparel_id}
+        size_id = opts[0]["id"]
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "UPDATE snkr_box_items SET default_size_id=? WHERE apparel_id=?",
+                (size_id, apparel_id),
+            )
+            await db.commit()
+    else:
+        chart = await _fetch_box_sales_chart(apparel_id, size_id=size_id)
+        if not chart:
+            return {"error": "sales-chart failed", "apparel_id": apparel_id}
+
+    history = await _fetch_box_sales_history(apparel_id, size_id)
+    if not history:
+        return {"error": "sales-history failed", "apparel_id": apparel_id}
+
+    # Write chart points (overwrite)
+    points = chart.get("points", [])
+    history_rows = history.get("history", [])
+    min_price = history.get("minPrice")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Overwrite chart for this (apparel_id, size_id)
+        await db.execute(
+            "DELETE FROM snkr_box_chart_points WHERE apparel_id=? AND size_id=?",
+            (apparel_id, size_id),
+        )
+        for p in points:
+            if isinstance(p, list) and len(p) == 2:
+                await db.execute(
+                    "INSERT INTO snkr_box_chart_points (apparel_id, size_id, ts_ms, price_jpy) VALUES (?, ?, ?, ?)",
+                    (apparel_id, size_id, int(p[0]), int(p[1])),
+                )
+
+        # Append history rows (UNIQUE-key dedup)
+        for h in history_rows:
+            await db.execute(
+                """INSERT OR IGNORE INTO snkr_box_prices
+                   (apparel_id, size_id, price_jpy, sale_date_relative, sale_timestamp_ms, buyer_icon_url)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    apparel_id, size_id, h.get("price"),
+                    h.get("date"),
+                    None,  # SNKR 的 date 是相對時間「26分前」、轉換成 ts 要解析
+                    h.get("imageUrl"),
+                ),
+            )
+
+        # Update snkr_box_items.min_price_jpy + last_synced_at
+        await db.execute(
+            "UPDATE snkr_box_items SET min_price_jpy=?, last_synced_at=CURRENT_TIMESTAMP WHERE apparel_id=?",
+            (min_price, apparel_id),
+        )
+        await db.commit()
+
+    return {
+        "apparel_id": apparel_id,
+        "size_id": size_id,
+        "chart_points": len(points),
+        "history_rows": len(history_rows),
+        "min_price_jpy": min_price,
+    }
+
+
+@app.get("/api/box/{apparel_id}")
+async def get_box_detail(apparel_id: int):
+    """前端 #/box?apparel_id=X 用。回 box metadata + chart points + 最近成交 list。
+
+    如果 last_synced_at IS NULL 或 > 24h、auto-sync 一次。
+    """
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        meta = await (await db.execute(
+            """SELECT apparel_id, title, set_name_jp, box_type, image_url,
+                      default_size_id, min_price_jpy, last_synced_at, first_seen
+               FROM snkr_box_items WHERE apparel_id=?""",
+            (apparel_id,),
+        )).fetchone()
+        if not meta:
+            return {"error": "box not found", "apparel_id": apparel_id}
+        meta_dict = dict(meta)
+        size_id = meta_dict["default_size_id"]
+        last_sync = meta_dict["last_synced_at"]
+
+    # auto-sync if never / stale (>24h)
+    need_sync = (last_sync is None)
+    if not need_sync:
+        async with aiosqlite.connect(DB_PATH) as db:
+            age_row = await (await db.execute(
+                "SELECT (julianday('now') - julianday(?)) * 24 AS age_h", (last_sync,)
+            )).fetchone()
+            if age_row and age_row[0] is not None and age_row[0] >= 24:
+                need_sync = True
+
+    if need_sync:
+        try:
+            await sync_box_prices(apparel_id)
+        except Exception as e:
+            print(f"[box] auto-sync failed: {e}")
+        # re-fetch meta to get updated size_id + min_price
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            meta = await (await db.execute(
+                """SELECT apparel_id, title, set_name_jp, box_type, image_url,
+                          default_size_id, min_price_jpy, last_synced_at, first_seen
+                   FROM snkr_box_items WHERE apparel_id=?""",
+                (apparel_id,),
+            )).fetchone()
+            meta_dict = dict(meta)
+            size_id = meta_dict["default_size_id"]
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        chart_rows = await (await db.execute(
+            "SELECT ts_ms, price_jpy FROM snkr_box_chart_points WHERE apparel_id=? AND size_id=? ORDER BY ts_ms ASC",
+            (apparel_id, size_id) if size_id else (apparel_id, -1),
+        )).fetchall()
+        history_rows = await (await db.execute(
+            """SELECT price_jpy, sale_date_relative, buyer_icon_url, created_at
+               FROM snkr_box_prices WHERE apparel_id=? AND size_id=?
+               ORDER BY id DESC LIMIT 20""",
+            (apparel_id, size_id) if size_id else (apparel_id, -1),
+        )).fetchall()
+
+    return {
+        "meta": meta_dict,
+        "chart": [{"ts_ms": r["ts_ms"], "price_jpy": r["price_jpy"]} for r in chart_rows],
+        "history": [dict(r) for r in history_rows],
+    }
+
+
+@app.get("/api/boxes")
+async def list_boxes(box_type: str | None = None, limit: int = 100):
+    """列 snkr_box_items 全部、可選 box_type filter。給前端 / debug 用。"""
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if box_type:
+            rows = await (await db.execute(
+                """SELECT apparel_id, title, set_name_jp, box_type, image_url, min_price_jpy, last_synced_at
+                   FROM snkr_box_items WHERE box_type=? ORDER BY apparel_id DESC LIMIT ?""",
+                (box_type, limit),
+            )).fetchall()
+        else:
+            rows = await (await db.execute(
+                """SELECT apparel_id, title, set_name_jp, box_type, image_url, min_price_jpy, last_synced_at
+                   FROM snkr_box_items ORDER BY apparel_id DESC LIMIT ?""",
+                (limit,),
+            )).fetchall()
+    return {"items": [dict(r) for r in rows], "count": len(rows)}
 
 
 def _normalize_jp_name(s: str) -> str:
@@ -3437,6 +3656,38 @@ async def category_character_list():
         ]
 
 
+@app.get("/api/proxy_img")
+async def proxy_img(url: str):
+    """代理外部圖（artofpkm / pokemondb / PokeAPI sprites）並回 CORS header。
+    前端 Canvas 真像素化要 read pixel、必須 same-origin 或 server 設 CORS-allow。
+    白名單擋開放代理風險。"""
+    from urllib.parse import urlparse
+    host = urlparse(url).netloc.lower()
+    ALLOWED = (
+        "artofpkm.com", "cdn.artofpkm.com",
+        "pokemondb.net", "img.pokemondb.net",
+        "raw.githubusercontent.com",
+    )
+    if not any(host == d or host.endswith("." + d) for d in ALLOWED):
+        return PlainTextResponse("host not allowed", status_code=403)
+    import httpx
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0 cardpool-proxy"})
+    except Exception as e:
+        return PlainTextResponse(f"fetch error: {e}", status_code=502)
+    if r.status_code != 200:
+        return PlainTextResponse(f"upstream {r.status_code}", status_code=502)
+    return Response(
+        content=r.content,
+        media_type=r.headers.get("content-type", "image/png"),
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
 @app.get("/api/category/pokemon/{pkm_id}/cards")
 async def category_pokemon_cards(pkm_id: int, language: str | None = None):
     """某寶可夢出現過的卡（依英文名 / 日文名 contain 比對）。
@@ -3528,24 +3779,59 @@ async def category_character_cards(char_id: int, language: str | None = None):
         elif language == "en":
             lang_filter = " AND cl.set_id LIKE 'en-%'"
 
-        sql = f"""
-            SELECT cl.set_id, cs.name AS set_name, cs.name_jp AS set_name_jp,
-                   cl.card_number, cl.name, cl.name_jp, cl.name_zh, cl.image_url, cl.rarity
-            FROM card_list cl
-            LEFT JOIN card_sets cs ON cs.set_id = cl.set_id
-            WHERE (cl.name = ?
-                   OR cl.name LIKE ? OR cl.name LIKE ? OR cl.name LIKE ?
-                   OR cl.name_jp LIKE ?)
-              AND cl.image_url IS NOT NULL
-              {lang_filter}
-            ORDER BY cs.release_date DESC, cl.set_id, CAST(cl.card_number AS INTEGER)
-            LIMIT 1000
-        """
-        params = (
-            name_en,
-            f"{name_en} %", f"% {name_en} %", f"% {name_en}",
-            f"%{name_jp}%" if name_jp else "____",
-        )
+        # 短英文名（N / MC / AZ 這類純 ASCII 字母）走嚴格模式、避免 LIKE '%N%' 撞到 V-UNION / LEGEND 等羅馬字卡名
+        is_short_ascii = bool(re.fullmatch(r"[A-Za-z]+", name_en or "")) or bool(re.fullmatch(r"[A-Za-z]+", name_jp or ""))
+
+        if is_short_ascii:
+            jp_clauses = []
+            jp_params: list[str] = []
+            if name_jp:
+                jp_clauses.append("cl.name_jp = ?")
+                jp_params.append(name_jp)
+                jp_clauses.append("cl.name_jp LIKE ?")
+                jp_params.append(f"{name_jp}の%")
+                jp_clauses.append("cl.name_jp LIKE ?")
+                jp_params.append(f"{name_jp}'s %")
+            jp_sql = " OR ".join(jp_clauses) if jp_clauses else "0"
+            sql = f"""
+                SELECT cl.set_id, cs.name AS set_name, cs.name_jp AS set_name_jp,
+                       cl.card_number, cl.name, cl.name_jp, cl.name_zh, cl.image_url, cl.rarity
+                FROM card_list cl
+                LEFT JOIN card_sets cs ON cs.set_id = cl.set_id
+                WHERE (cl.name = ?
+                       OR cl.name LIKE ? OR cl.name LIKE ? OR cl.name LIKE ?
+                       OR cl.name LIKE ?
+                       OR {jp_sql})
+                  AND cl.image_url IS NOT NULL
+                  {lang_filter}
+                ORDER BY cs.release_date DESC, cl.set_id, CAST(cl.card_number AS INTEGER)
+                LIMIT 1000
+            """
+            params = (
+                name_en,
+                f"{name_en} %", f"% {name_en} %", f"% {name_en}",
+                f"{name_en}'s %",
+                *jp_params,
+            )
+        else:
+            sql = f"""
+                SELECT cl.set_id, cs.name AS set_name, cs.name_jp AS set_name_jp,
+                       cl.card_number, cl.name, cl.name_jp, cl.name_zh, cl.image_url, cl.rarity
+                FROM card_list cl
+                LEFT JOIN card_sets cs ON cs.set_id = cl.set_id
+                WHERE (cl.name = ?
+                       OR cl.name LIKE ? OR cl.name LIKE ? OR cl.name LIKE ?
+                       OR cl.name_jp LIKE ?)
+                  AND cl.image_url IS NOT NULL
+                  {lang_filter}
+                ORDER BY cs.release_date DESC, cl.set_id, CAST(cl.card_number AS INTEGER)
+                LIMIT 1000
+            """
+            params = (
+                name_en,
+                f"{name_en} %", f"% {name_en} %", f"% {name_en}",
+                f"%{name_jp}%" if name_jp else "____",
+            )
         rows = await (await db.execute(sql, params)).fetchall()
         out_rows = [dict(r) for r in rows]
         for r in out_rows:
