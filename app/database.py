@@ -733,9 +733,9 @@ async def get_all_card_sets(language: str = "jp") -> list:
                        j.release_date AS jp_release_date,
                        em.era AS era,
                        MIN(a.id) AS artofpkm_id,
-                       MIN(a.display_order) AS art_display_order,
+                       NULL AS art_display_order,
                        MIN(a.release_date) AS art_release_date,
-                       MIN(a.logo_url) AS art_logo_url
+                       NULL AS art_logo_url
                 FROM jp_card_list_set j
                 LEFT JOIN jp_set_era_map em ON em.pg = j.pg
                 LEFT JOIN card_sets cs ON cs.name_jp = j.name_jp AND cs.language='jp'

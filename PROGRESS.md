@@ -57,6 +57,18 @@
 - **backup 檔（`*.before-*`）跟 git HEAD 對不起來時、不能用 backup 拆 commit**：5/24 拆 commit 撞到 — ebay.py 有 3 個 `.before-*` backup（signin-fix / stealth-fix / sop-removal）、本想依時序重放各拆 1 commit、但 `diff -q git HEAD vs before-signin-fix-20260520` 顯示 differ、表示 HEAD 跟 backup 之間就有未記錄改動、依 backup 重放會產生 broken 中間狀態（commit history 跑不起來的 code）。**修法**：放棄精準時序拆、改用「一檔合一 commit、commit message 註明累積 N 波改動」、git blame 仍可從 commit message grep 出哪波。**未來通則**：要靠 `.before-*` 拆 commit 前、先 `diff git HEAD vs backup` 確認 backup == HEAD 該 file。對不起來就放棄拆、合一個 commit 訊息詳註。
 - **driver 的 `pending=N` log 是 LIMIT 後的 `len(rows)`、不是 query 全集數量、會誤導**：5/24 撞到 — `_recrawl_high_rarity_ebay.py --limit 3` 跑出 log `pending (high-rarity + 0 row)=3`、user 一看以為「全 DB 只 3 卡 pending」、其實全 DB 是 1,848 卡。**修法**：driver log 應該分開印 `total_query_match=N`（不含 LIMIT、完整 gating SQL count）+ `pending_for_this_run=M`（含 LIMIT、實際進 queue 數）。**未來寫 driver 都要遵循**、不只印一個 `pending=N` 容易混淆。
 - **SQL JOIN 兩張表都有同名欄要 alias prefix（否則 SQLite 報 `ambiguous column name`）**：5/24 撞到 — `SELECT name_jp FROM jp_card_list JOIN jp_card_list_set` → `sqlite3.OperationalError: ambiguous column name: name_jp`。修法：用 alias prefix（`jcl.name_jp` / `jcls.name_jp`）。**基本 SQL 但每次跨表 query 都會忘**、特別 jp_card_list 跟 jp_card_list_set 都有 `name_jp` 欄、最容易撞。寫 cross-table SELECT 時都加 alias 不會錯。
+- **pokemon-card.com 搜尋頁是 JavaScript 驅動、HTML 無 inline 結果、只有 dropdown JS array**：5/24（凌晨延伸）撞到 — 寫 jp set backfill plan Task 4 時、原以為搜尋頁 HTML 有結果 list 可 regex parse、實際所有 query 命中的卡盒全在頁面內嵌的 `<select id="expansionCodes">` dropdown JS array(`{name:"pg", value:"954", label:"拡張パック「アビスアイ」"}` 物件)、約 81 個近期 set 全包。**修法**：parse dropdown JS array、用 NFC normalize jp_name 後字串比對 label 取 pg + canonical_jp_name。**通則**：JP 官網 + 重 JS 驅動、抓 HTML 不要靠「expandResult 元素」、要靠 inline JS 變數 / dropdown 預設清單。
+- **pokemon-card.com `?expansionCodes={code}` 取卡片列表會被 CloudFront 503 擋**：5/24（凌晨延伸）撞到 — Task 4 嘗試訪問 `https://www.pokemon-card.com/card-search/index.php?expansionCodes[]=M5` 想要取 M5 卡列表、httpx 直打全 503 cached error。試多種 URL 變體都被擋。**結論**：取單 set 卡片列表不能用 httpx 直接 GET、要 Playwright 渲染 JS 或挖正確的 XHR endpoint(後者需要 spike 15-30 分鐘確認)。**通則**：JP 官網對「列表級」endpoint 有 CloudFront 防爬規則、對「單卡詳情頁」(`details.php/card/{cardID}`) 比較寬鬆(`jp_detail_crawl_v2.py` 一直能跑)。
+- **pokemon-card.com 日文用 NFD(分解形)、不是 NFC(預組合形)**：5/24（凌晨延伸）撞到 — Task 4 subagent 寫 `'アビスアイ' in html` 字串比對全 False、debug 發現「ビ」實際是「ヒ + ゛」(U+30D2 + U+3099 兩個字符)、不是 precomposed「ビ」(U+30D3 一個字符)。**修法**：所有日文字串比對前必先 `unicodedata.normalize("NFC", s)`、否則漏網無對 / 重 chars 校對。**通則**：對 JP 官網的爬蟲、字串比對前先 NFC normalize 是 hardcoded 規則、不是 optional。Pokemon-card.com 跟 Bulbapedia 都有這現象。
+- **`scrape_artofpkm.py` 跑 `DROP TABLE` 撞 cards.db 寫鎖**：5/24（凌晨延伸）撞到 — 重抓 artofpkm 拿 M5 卡資料時、`init_tables()` 內 `DROP TABLE IF EXISTS artofpkm_sets; DROP TABLE IF EXISTS artofpkm_cards; CREATE TABLE...` 在 cards.db 上 fail with `database is locked`、因 FastAPI backend (run_api.py) 一直開著 connection、WAL mode 也擋 DROP TABLE。**修法**：重抓前先 `Stop-Process` API、跑完再啟。**通則**：任何用 `DROP TABLE` 重建表的腳本要先停 API。或者改寫 `scrape_artofpkm.py` 用 `DELETE FROM` + `INSERT OR REPLACE` idempotent 模式、不 DROP TABLE。
+- **artofpkm 對新 set `total_visible=0 + release_date=NULL` 不代表沒收、可能是 stale data**：5/24（凌晨延伸）撞到 — 看 artofpkm_sets WHERE id=588(M5 アビスアイ)發現 total_visible=0、原以為「artofpkm 還沒收 M5」、其實是上次 scrape 時間 5/7、那時 M5 還沒發行(M5 是 2026 後期)、artofpkm 只 placeholder 一個 set 名。**修法**：重跑 `scrape_artofpkm.py` 取最新狀態、跑完看 total_visible 才知道 artofpkm 有沒有實際收。**通則**：DB 內 `total_visible=0` 對最新 set 不可信、要看 `MAX(scraped_at)` 跟 set release_date 比較才能判定「真的沒收」vs「stale」。
+- **card_list jp 系列 image_url 整套錯位、name_jp 卻是對的**：5/25 撞到 — user 報 jp-Japanese-XY-Promos #75 「皮卡丘的圖配噴火龍 EX 的名字」。Audit 發現 26 個 set / ~3,250 卡 image_url vs name_jp 對不上、其中 16 個 set 是整套錯位（≥80% mismatch）。Root cause：2026-04-28 整合 artofpkm 卡圖時假設「artofpkm 順位 = 卡號」、但 artofpkm 對某些 set 多收了 reverse holo 變體 / 1ED 變體、整套順位從某個位置開始偏 1-2 格、累積到後段嚴重錯位。**修法**：用 jp_card_list.thumb_url 補回（jp_card_list 是 5 月後從 pokemon-card.com 日本官方爬的、卡名 + 圖 100% 對齊）、只 UPDATE image_url、不動 name_jp。**通則**：用 artofpkm 整合的 image 對「擴充包」可信、對含變體的高級擴充包（SAR/SR/UR/AR 多）整套不可信、要用 jp_card_list 對齊。
+- **jp_card_list 完全不收 promo set (XY-P / SwSh-P / SV-P 9001 例外)**：5/25 撞到 — 修圖過程發現 jp_card_list 對 XY-P 0 卡、對 SwSh-P 也是 0 卡。但 SV-P 卻在 jp_card_list_set pg=9001 / 9002（朱紫 + MEGA promo）有資料。**結論**：jp_card_list 只覆蓋擴充包 + 部分新期 promo (9001/9002)、不收老期 promo (XY-P / SwSh-P / BW-P 等)。**影響**：image-fix-jp-artofpkm 腳本對 16 受害 set 只能補 9 個（擴充包）、其餘 7 個（含 user 最初報的 XY-P）無 jp_card_list 來源、需另想對策（pokellector 個別頁 / pokemon-card.com details.php 個別卡 / 維持原圖暫忍）。**通則**：用 jp_card_list 當 image source 前要查 `set_code` 在 jp_card_list 是否存在、promo set 多半 0 卡。
+- **audit script 比對 romaji 必先 normalize 兩種 IME 拼法 + 雙寫消音**：5/25 撞到 — v1 audit 比 image filename vs pokemon_dict.romaji 算錯位率、初版報「26 set 受害、18 個整套錯位」。但 sample 含 false positive 案例：`ピカチュウ` 可以拼 `PIKACHUU` 也可拼 `PIKACHIXYUU`（CHI-XYU IME 寬鬆模式拗音）/ `レックウザ` 可拼 `REKUUZA` 或 `REKKUUZA`（雙寫消音）。v2 加 normalize（XYU↔YU、XYO↔YO、XYA↔YA、KK→K、SS→S、UU→U、OU→O）後、整套錯位數從 18 → 16、全對齊從 16 → 70。**通則**：對 artofpkm romaji 比對前必 normalize、不然 false positive 干擾判斷。
+- **card_prices 表 jp- prefix vs 純數字 pg 雙系統並存、同 set 重複資料**：5/25 順手發現（沒修） — card_prices 有 51 萬 row 用 `jp-XXX` 風格 set_id、37 萬 row 用純數字 `pg` 風格 set_id（如 `882` vs `jp-Pokemon-151`）。同一 set 在兩種 prefix 下都有資料：Pokemon-151 在 `jp-Pokemon-151` 有 20,094 row、在 `882` 有 20,529 row。Root cause：歷史 sync code 用 card_list.set_id (artofpkm 風格 'jp-Pokemon-151')、5 月後 sync_snkr / sync_ebay 改用 jp_card_list.pg (純數字 '882')、雙路寫入 card_prices 同 UNIQUE 鍵不同 set_id。**影響**：(1) 同一 set 價格資料分裂兩處、API 查詢用哪個 set_id 決定看到哪批 (2) 浪費 ~37 萬 row 重複空間 (3) 未來 SNKR / eBay sync 不一致。**未修**：合併要先決定 source of truth (建議 pg 風格、因為 jp_card_list 才是 canonical)、再 cascade UPDATE card_prices.set_id、然後 dedupe UNIQUE 衝突 row。預估 1-2 hr 工作量。**通則**：未來新增爬蟲 / sync endpoint 寫 card_prices 一律用「真實官方卡號 (jp_card_list 風格)」、不用 card_list slug。
+- **artofpkm 對某些 set 不只「順位偏移」、是「整套打散重組」**：5/25 撞到 — 處理 jp-Dark-Phantasma / jp-Galactics-Conquest / jp-Awakening-of-Psychic-Kings 3 個 set 時、原以為跟其他 9 set 一樣「順位偏移」、實際 dry-run 發現 artofpkm 對這 3 set 收的「卡列表」跟日本官方該 set **完全不同**：Dark-Phantasma 100 卡只 48 卡在官方 set 內、Galactics-Conquest 96 卡只 3 卡在、Awakening 88 卡只 4 卡在。其他 ~200 row 是 artofpkm 自己亂分類來別 set 的卡。判別法：用 `name_jp` 反查 jp_card_list 看分佈在哪些 pg、若**散在 5-10 個不同 pg**（如 Dark-Phantasma 散在 pg=858/7/3/2/24/25/19/20/10）就是「整套打散」。**修法**：DELETE artofpkm orphan row + UPDATE 對得上的 image_url。5/25 共 DELETE 229 row + 2,067 row card_prices orphan。**通則**：對「artofpkm 整合的 jp set」要先做 name_jp 反查 + pg 分佈 sanity check、判別是「順位偏移」(集中在 1 個 pg) 還是「整套打散」(散在多 pg)、後者 row 多數要 DELETE。
+- **AskUserQuestion option 寫亂(打錯字 / 半生不熟句子)、既有兩個 hook 抓不到**：5/24（凌晨延伸）違反多次 — 既有 `.claude/hooks/check_traditional_chinese.ps1` 偵測簡體 / 日文整段 / 英文整段、`check_question_plain.ps1` 偵測 30 個英文黑話詞、但對「打錯字(『折黃』『抽頻』『素雜折』)、半生不熟句子(『跡 daily backfill 不合』)」這種**詞義不清**的中文錯亂、**hook regex 抓不到、要 LLM judge 才能擋**。本次 session 我寫 5-6 個 AskUserQuestion option 都這樣、user 反覆抱怨「不是繁體中文」「整理一下」。**Future LLM session 嚴守規則**：寫每個 AskUserQuestion option label / description 前、把該段文字念一遍(內部模擬)、確認每個詞中文通順、無打錯字、user 第一次讀就懂。**通則**：hook 是補強、不是替代。LLM 自己寫白話才是主要防線、hook 只擋低階錯。
+- **Bulbapedia Setlist/entry template 對不同卡型有多種變體、parser regex 不能 hardcode 一種**：5/25 撞到 — M5 wikitext parse 用 `\|J\|` hardcode separator、漏抓 5 卡 (102/103/107 trainer 卡用 `|I|` separator、80/81 Energy 卡內嵌雙 `{{TCG ID}}` template + `{{e|Lightning}}` 中間元素)。**修法**：用 line-based + `[JI]` 兼容 + lazy match 抽 first TCG ID + trailing template + 最後 3 個 `|` 切 type/subtype/rarity。實證對 M5 從 113 卡 → 118 卡 (100%)。**通則**：未來爬其他 Bulbapedia set 也適用、entry template 變體要先 sample 幾類卡 (Pokemon / Trainer / Item / Energy / Stadium) 看格式、parser 設計成 line-based 不是單一 regex。**Bulbapedia mediawiki API page param `'` apostrophe 不要 URL encode**（5/25 同期撞到、合進此條）— 用 `%27` 撞 invalidtitle、直接 `'` 才能 hit、`Gladion's_Showdown_(Abyss_Eye_76)` 拿到「グラジオの決戦」。
 
 ---
 
@@ -1155,6 +1167,222 @@ PreToolUse on AskUserQuestion、偵測簡體 / 日文整段 / 英文整段、有
 1. **爬 Bulbapedia trainer/item 補 jp_term_dict + 重跑 v7**：537 distinct romaji × Bulbapedia search + parse `|jname=` → 補進 jp_term_dict → 重 v7 reverse romanize 補 card_list。預估 1-2 hr、補 ~500-1500 張
 2. **拆 commit + 寫 PROGRESS.md**：今晚 backend 改動 + 5/22 累積、明天先 review git diff 拆 4-6 個語意 commit。預估 15 分鐘
 3. **延續未動方向**（看餘裕）：71 張高稀有度 0 row eBay verify / Portfolio Phase 2 後端 API / MVP S1 auth KYC / GoldenGem Phase A 自選頁
+
+### 2026-05-25（凌晨）— card_list jp 系列 image_url 大整改（12 set / 2,187 卡 UPDATE / 229 卡 DELETE）
+
+延續 5/24 開工方向、user 報 `jp-Japanese-XY-Promos #75` 看到「皮卡丘的圖配噴火龍 EX 的名字」、開始 audit 全 card_list jp 系列 image 對齊問題。
+
+#### 完成
+
+**1. 全 card_list 圖片錯位 audit（v1 → v2）**
+- 寫 `_audit_image_mismatch.py`、用 pokemon_dict.romaji 反查每張卡 name_jp vs image_url filename
+- v1 audit：273 set / 16 全對齊 / 18 整套錯位 (≥80%) — 含 false positive
+- v2 加 normalize（XYU↔YU 拗音 IME 雙拼 / KK→K 雙寫消音 / UU→U 長音）：273 set / 70 全對齊 / 16 整套錯位
+- 真實受害：16 紅 + 10 橘 = 26 set / ~3,250 卡（總 card_list 約 7-8%）
+
+**2. 確認 source of truth：jp_card_list.thumb_url**
+- jp_card_list 21,552 卡 100% 有 thumb_url、來源 pokemon-card.com 日本官方
+- 抽 Pokemon-151 #1-100 驗證：name_jp + thumb_url 全對齊（FUSHIGIDANE→#1, GORON→#75 等）
+- card_list jp 系列只有 image_url 錯位、name_jp / name 都是對的（user 看到「噴火龍 EX 名字」是對的、皮卡丘圖才是錯的）
+
+**3. Phase 1：9 set / 2,060 卡嚴格 UPDATE**
+- 寫 `_apply_image_fix.py`、對 9 個受害 set（Pokemon-151 / Shiny-Treasures-ex / Terastal-Festival-ex / VSTAR-Universe / Incandescent-Arcana / Dark-Phantasma / Start-Deck-100 / White-Flare / Black-Bolt）
+- 策略：`card_list.name_jp == jp_card_list.name_jp` 完全一致才 UPDATE image_url
+- backup `cards.db.before-image-fix-jp-artofpkm-20260525-000036` (814 MB)
+- 共 UPDATE 2,060 row
+- user 驗證 visual report (`_image_fix_preview.html` 8081 server) + 樣本 detail 頁、確認對齊
+
+**4. Phase 2：放寬空格 normalize 補 72 卡**
+- 同 9 set、`unicodedata.normalize('NFKC') + 去半全形空格` 後比對
+- 補回「パルデアケンタロス」vs「パルデア ケンタロス」這類同卡漏改的 row
+- 共 +72 row（少於預估 175、實際多數 name 差是 V/EX 後綴不同卡、不該改）
+
+**5. Phase 3：3 set artofpkm orphan DELETE**
+- jp-Dark-Phantasma / jp-Galactics-Conquest / jp-Awakening-of-Psychic-Kings
+- spike：用 name_jp 反查 jp_card_list 看 pg 分佈、發現 artofpkm 對這 3 set 整套打散重組（卡名散在 5-10 個 pg）
+- dry-run v1：用 `(card_number, name_jp)` 為 key → keep 28 / DELETE 256 — bug、card_number 兩邊本來就不同步
+- dry-run v2：改用 `name_jp` 為 key → keep 55 / DELETE 229 / card_prices orphan 2,067
+- backup `cards.db.before-delete-artofpkm-orphan-20260525-001915` (814 MB)
+- transaction 內 DELETE card_prices 2,067 row → DELETE card_list 229 row → UPDATE 55 row image_url、全 COMMIT
+
+**6. 整體成果**
+- 總計：2,187 卡 UPDATE image_url / 229 卡 DELETE / 2,067 row card_prices DELETE
+- 12 個受害 set 整改完成（9 主修 + 3 DELETE+UPDATE）
+- 9 個主修 set 覆蓋率：8 個 92-100%、1 個 (Dark-Phantasma keep 後) 96%
+
+#### 進行中
+
+- **背景 1,848 卡高稀有度 eBay 重爬**：05/24 03:59 撞到 connection error 掛掉、23:59:10 重啟、實際 progress 不明（log 沒新 progress 行）。預期明天 spot-check 結果
+- **3 set Phase 3 後 Dark-Phantasma 剩 48 卡但 jp_card_list pg=859 只 28 卡**：表示 card_list 有 ~20 卡是「同 name_jp 重複 row」（不同 cn 同名）、dedupe 是 schedule item
+
+#### 踩到的坑（已加進上方 Known Pitfalls）
+
+1. **card_list jp 系列 image_url 整套錯位、name_jp 卻是對的**（修法：jp_card_list.thumb_url JOIN UPDATE）
+2. **jp_card_list 完全不收 promo set（XY-P / SwSh-P / BW-P 等舊期 promo）**（9001/9002 朱紫 promo 是例外）
+3. **audit 比 romaji 必先 normalize 兩種 IME 拼法 + 雙寫消音**（CHIXYU↔CHU、KK↔K、UU↔U）
+4. **card_prices 表 jp- prefix vs 純數字 pg 雙系統並存**（順手發現、未修、合併要 cascade UPDATE）
+5. **artofpkm 對某些 set 整套打散重組**（不只順位偏移、是 set 內容跟官方完全不同、判別用 name_jp 反查 pg 分佈）
+
+#### 明天的下一步
+
+1. **修 user 最初報的 XY-P #75（pokemon-card.com 個別爬）**：jp_card_list 沒收 XY-P / SwSh-P、需用 `details.php/card/{id}` 個別卡頁爬。需 spike `details.php` URL pattern + 找出 XY-P set 對應的 card id 範圍。預估 1-2 hr。**這是 user 最初報 bug 的 set、優先級高**
+2. **處理 jp-2009-Movie / jp-Battle-Starter-Pack / jp-Reviving-Legends** 等老 set：jp_card_list 沒覆蓋的 promo / starter set、同 1 處理
+3. **處理 🟠 10 個部分錯位 set（30-80% mismatch）**：HeartGold-Collection / Battle-Region / Bonds-to-End-of-Time / SoulSilver-Collection / VMAX-Climax / 4 個小 set。預期跟 9 主修 set 一樣「順位偏移」、用同 strategy。預估 30 分鐘 + spike 確認
+4. **card_prices jp- vs 純數字 pg 雙系統合併**（順手發現的議題、~37 萬 row 重複）：cascade UPDATE jp- prefix → pg、dedupe UNIQUE 衝突。預估 1-2 hr
+5. **Dark-Phantasma 48 row 重複 dedupe**（同 name_jp 多 row）：30 分鐘
+6. **背景重爬 1,848 卡 spot-check**：可能背景已掛、check 後續是否要 resume
+7. **拆 commit**：今天的 image fix 工作（cards.db binary diff、無 git source code 改動、可選擇做不做 audit script commit）
+
+### 2026-05-25（午）— M5 アビスアイ 118 卡上架 jp_card_list（解 SNKR 熱門點不到本站詳情）
+
+延續 5/24 凌晨延伸方向、把 artofpkm 重抓拿到的 M5 81 卡 + Bulbapedia 額外 37 卡（SR/SAR/AR/MUR 變體）搬進 jp_card_list 主表、解 SNKR 熱門 12 張 M5 卡點不到本站詳情的主訴。
+
+#### 完成
+
+**1. M5 中文名查官方網站 = 「擴充包『深淵之瞳』」**
+- 中文官方網站 (asia.pokemon-card.com/tw) 確認 M5 アビスアイ = 「擴充包「深淵之瞳」」(不是 user 一開始選的「深淵之眼」)
+- 證實 CLAUDE.md「user 給的 URL / 截圖 / 參考必須先打開看內容」原則的價值 — 不先 verify 會用錯字
+
+**2. SNKR 熱門 12 張 M5 卡編號全是 82-118 範圍 (SR/SAR/AR/MUR 變體) — artofpkm 只 1-81**
+- query snkr_hot_items 確認熱門 12 張 M5：rank2 #114 SAR / rank6 #117 SAR / rank8 #87 AR / rank9 #115 SAR / rank10 #111 SR / rank11 #112 SAR / rank12 #118 MUR / rank13 #99 SR / rank15 #108 SR 等
+- **沒一張在 1-81 基礎卡範圍** — 只搬 artofpkm 81 卡 user 訴求完全沒解、必須搬 1-118
+- user 確認搬 1-118 全 118 張
+
+**3. Bulbapedia mediawiki API parse 118 卡**
+- mediawiki API: `https://bulbapedia.bulbagarden.net/w/api.php?action=parse&page=Abyss_Eye_(TCG)&format=json&prop=wikitext`
+- 用 line-based regex parse `{{Setlist/entry|N/081|...}}` 取 [card_number, name_en, suffix_tpl, type, rarity]
+- parser v1 漏 5 張（80/81 Energy 卡用雙 `{{TCG ID}}` template、102/103/107 trainer 卡用 `|I|` 不是 `|J|`）
+- v2 改用更寬鬆 line pattern、適應 `[JI]` separator + dual TCG ID template → 118 卡 100% 抓到
+
+**4. EN → JP 反查 name_jp（多源接力 0 MISS）**
+- pokemon_dict 直接命中：82 卡（4 張 Mega 進化都對：Zeraora/Chandelure/Darkrai/Excadrill）
+- pokemon_dict + Mega 前綴邏輯：12 卡（メガXXXex 系列）
+- jp_term_dict：1 卡（Crushing Hammer → クラッシュハンマー）
+- snkr_hot_items title parse 補：3 卡（Gwynn→ムク、Misty's Spirit→カスミの元気 share 給同 EN 名 reprint）
+- Bulbapedia 單卡頁 fetch `|jname=`：10 distinct trainer/item/Energy 名（13 distinct 中 10 成功）
+- 最終 0 EN placeholder（118 卡全有正確 name_jp）
+
+**5. _apply_m5_to_jp_card_list.py 寫 DB**
+- backup `cards.db.before-m5-import-20260525-090000` (815 MB)
+- cardID 分配：1-81 用 artofpkm image_id (50220-50300)、82-118 連續延伸 (50301-50337)
+- jp_card_list_set INSERT pg=954, name_jp='拡張パック「アビスアイ」 (擴充包「深淵之瞳」)', hit_cnt=118, release_date='2026-05-22', logo_url=NULL（待補）
+- jp_card_list 118 row + jp_card_pg_link 118 row 全 commit
+- Idempotent：開頭 DELETE pg=954 三表、可重跑
+
+**6. 圖片來源組合**
+- 1-81 用 artofpkm thumb_url（已有高解析、verified）
+- 82-118 中 10 張用 snkr_hot_items.image_url（SNKR 商品縮圖）
+- 82-118 中 27 張無圖（SR/SAR/AR/MUR 變體 SNKR 熱門沒涵蓋的）— thumb_url 空字串、前端顯破圖 icon、待 daily backfill 補
+- artofpkm_sets 對 M5 logo_url=NULL、jp_card_list_set.logo_url 也 NULL 暫缺 set 封面
+
+**7. 驗證**
+- `/api/cardlist/sets?language=jp` 回 M5 (set_id='954', name='拡張パック「アビスアイ」 (擴充包「深淵之瞳」)', total_cards=118, release_date='2026-05-22') ✓
+- `/api/cardlist/sets/954` 回 118 卡 list、name_zh 自動翻譯（熱帶龍 / 強顎雞母蟲 / Mega達克萊伊ex 等）✓
+- `/api/prices/954/114` 回 #114 メガダークライex SAR metadata 完整 ✓
+- POST `/api/admin/snkr-hot/refresh` → mapped_to_db 從 7/30 提升到 **18/30**、前 15 名 5 張 M5 單卡 100% 全 mapped ✓
+- 主訴解決：user 點 SNKR 熱門 5 張 M5 卡能跳本站詳情（不再 fallback 跳 SNKR 商品頁）
+
+#### 進行中 / 待做
+
+- **playwright MCP browser lock 鎖死**：browser 啟動後 user data dir 仍鎖、無法 close 也無法 navigate。前次 session 沒乾淨關閉導致。本次 visual verify 改用 curl API endpoint 替代、未做截圖。修法待 process 真死或 clear lock file
+- **27 卡無圖（82-118 範圍 SR/SAR/AR 變體 SNKR 熱門沒涵蓋）**：daily backfill 系統建好後補、目前 thumb_url 空字串
+- **trainer 卡 name_zh 缺**（Misty's Spirit / Gwynn / Dark Bell 等）：後端 `_translate_jp_card_name_to_zh` 對 trainer 沒 hit、未來 jp_term_dict 補中文 batch 再 cover
+- **M5 set 封面 logo_url=NULL**：artofpkm 沒給、未來 daily backfill 從 pokemon-card.com 抓
+- **Plan Task 5-22 仍未重寫**（5/24 凌晨延伸 todo）
+- **`app/database.py` 工作目錄小修 + `ONBOARDING.md` 仍 untracked**
+
+#### 踩到的坑（已加進上方 Known Pitfalls）
+
+新加 3 條：
+
+- **Python 3.14 f-string 內 `\"` escape 在 expression 仍會撞 SyntaxError**：寫 `print(f"x: {cur.execute(\"SELECT ...\").fetchone()[0]}")` 在 line 91 撞 `unexpected character after line continuation character`。3.12+ 解除部分限制但 backslash 仍受限。**修法**：把 SQL 拆出來 assign 到 var、不在 f-string expression 內 escape；或用 `'` 單引號避開 escape
+- **Bulbapedia mediawiki API page param apostrophe `%27` encode 撞 invalidtitle**：fetch `Gladion's_Showdown_(Abyss_Eye_76)` 用 `urllib.parse.quote` 把 `'` 變 `%27` → API 回 `invalidtitle`。改用直接 `'` 不 encode → 成功拿到「グラジオの決戦」。**通則**：mediawiki API page param 接受直接 unicode/punctuation、不需要 URL encode；只 URL pattern 的 query string 才要 encode
+- **Bulbapedia Setlist/entry template 對 Pokemon 用 `|J|` separator、對 Item/Trainer 用 `|I|`、對 Energy 卡內嵌雙 `{{TCG ID}}` template**：第一版 parser regex hardcode `\|J\|` 漏 102/103/107 trainer 卡、且 Energy 80/81 卡有兩個 TCG ID + `{{e|Lightning}}` 中間元素也漏。**修法**：用 `[JI]` 兼容、用 line-based + lazy match 適應雙 TCG ID。**通則**：Bulbapedia wikitext 對 set list 用多種 entry 變體、regex 不能 hardcode 一種、要 line-based 抽 first TCG ID + trailing template + 最後 3 個 `|` 切 field
+
+#### 明天的下一步
+
+1. **拆 commit 今天新增 + 整理 untracked**：今天新加 `_build_m5_data.py` / `_fetch_m5_trainer_jnames.py` / `_apply_m5_to_jp_card_list.py` 都是 `_` 開頭 local-only、不 commit。但 `app/database.py` 2 行未 commit + `ONBOARDING.md` untracked 仍待處理。預估 15 分鐘
+2. **27 卡無圖補**：spike SNKR 個別商品頁取 image_url、或用 pokemon-card.com `details.php` 個別卡頁取（要先驗 URL pattern 對 M5 卡是否通）。預估 1-2 hr 含 hit rate 評估
+3. **Plan Task 5-22 重寫**（用「新 set artofpkm / 舊 set pokemon-card」分流策略）— 5/24 凌晨延伸 todo、可在 M5 hands-on 經驗上重做。預估 2-3 hr
+4. **跟上 5/25 凌晨段未動方向**：(a) XY-P #75 修圖（user 最初報的 bug、優先）(b) 🟠 10 個部分錯位 set 用 Phase 1 strategy 修 (c) card_prices jp-/pg 雙系統合併
+5. **延續未動方向**：71 張高稀有度 0 row eBay verify / Portfolio Phase 2 後端 API / MVP S1 auth KYC / GoldenGem Phase A 自選頁
+
+### 2026-05-24（凌晨延伸）— SNKR 熱門首頁 + jp set backfill plan + artofpkm 重抓
+
+跨第二段 session、做完 SNKR 熱門首頁 feature 上線 + 規劃完整 reusable jp set backfill 系統(brainstorm + spec + plan + 4/22 tasks 完成)、發現 plan 部分假設過時、重抓 artofpkm 拿到 M5 卡資料。
+
+#### 完成
+
+**1. SNKR 熱門首頁 feature 上線(整套)**
+- 起因：user 要把「今日熱門」區塊換成 SNKR トレカ・ゲーム 排行(含盒子 + 跨 TCG)
+- 新表 `snkr_hot_items`(id / batch_id / rank / apparel_id / title / price_jpy / image_url / is_box / set_id / card_number / fetched_at)
+- 後端 `app/main.py`：
+  - `_scrape_snkr_hot_items` 爬 SNKR 搜尋頁(httpx async、regex parse productTile anchor)
+  - `_resolve_snkr_title_to_card` 從 SNKR title 內 `[set_code N/T]` 反查 jp_card_list 拿 (pg, card_number)
+  - `_refresh_snkr_hot_items` 寫進表 + 計 mapped_to_db
+  - GET `/api/snkr/hot?limit=10`(自動 24h cache、過期重抓)
+  - POST `/api/admin/snkr-hot/refresh` 手動觸發
+- 前端 `..\卡波\index.html` `loadTrendingCarousel` 改接、有 set_id+card_number 跳本站詳情、否則跳 SNKR 商品頁
+- 三種角標狀態：mapped 有對映無角標 / 未對映「↗ SNKR」/(future)「🕒 補資料中」
+- disclaimer「資料整理自 SNKR 公開 API・最後更新 X」加在區塊下方
+- URL 加 `brandIds=pokemon` 過濾跨 TCG(海賊王 / Union Arena 鏈鋸人原本污染前 10 名)
+- 改完 SNKR 熱門 30 卡 mapping rate：1/30 → 7/30(改 URL 後)
+
+**2. JP set backfill 系統規劃(brainstorm + spec + plan + 開工)**
+- 起因：M5 アビスアイ 在 SNKR 熱門 top 8、但 jp_card_list 沒收(新 set)、user 點不到本站詳情
+- 用 superpowers:brainstorming skill 跑 5 個 design section、user 確認每段
+- 6 個基礎決策：
+  1. 範圍 = 全套規則化 + 抽 reusable scraper 模組
+  2. 來源 = 多源(pokemon-card 官方 + artofpkm HD 圖 + 52poke wiki 中譯)
+  3. 觸發 = 每日清晨 03:00 排程
+  4. 補完動作 = 接著補 SNKR + eBay 價格
+  5. 速度限制 = 一天 2 個卡盒、卡之間隔 2 秒
+  6. 範圍延伸 = 同時支援補漏卡(M4 #84-114)
+- spec 寫進 `docs/superpowers/specs/2026-05-24-jp-set-backfill-design.md`(10 section)
+- plan 寫進 `docs/superpowers/plans/2026-05-24-jp-set-backfill.md`(22 個 task、5-7 hr)
+- 改用 subagent-driven-development skill dispatch task 並行跑
+- Task 1-4 完成、4 個 commit：
+  - `47ac2ab` db: 加 `set_backfill_jobs` 表
+  - `f790b22` scraper: `jp_set_backfill.py` 骨架 + `enqueue_set` / `detect_dead_running_jobs`
+  - `c97bd0d` scraper: `allocate_new_pg`(普通 / promo 分區段、M5 → 954、SV-P → 9100)
+  - `38c5a9b` scraper: `PokemonCardComSource.search_set_by_jp_name`(對舊 set 取 pg、3 個關鍵字 100% 命中)
+
+**3. Task 4 發現 plan Task 5+ 過時、user 改策略**
+- pokemon-card.com 搜尋頁是 JavaScript 驅動、HTML 無 inline 結果、只有 dropdown JS array(plan 寫的 regex `expansionCodes?=` 對不到、實際是 `{name:"pg", value:"954", label:"拡張パック「アビスアイ」"}` 物件)
+- pokemon-card.com `?expansionCodes={code}` 取卡片列表會被 CloudFront 503 擋(要 Playwright 或挖 XHR、httpx 直打不行)
+- user 給策略指引：**新彈卡盒(剛出不久) artofpkm 為主、舊卡盒 pokemon-card 為主**(官方對新 set 資料可能還沒到位)
+
+**4. artofpkm 重抓(M5 拿到 81 張卡)**
+- 看 artofpkm_sets 發現 M5(id=588)在表內、但 total_visible=0(上次掃描 5/7、那時 M5 還沒發行)
+- 重跑 `scrape_artofpkm.py`、第一次撞 DB lock(`DROP TABLE artofpkm_sets` 撞到 API 的 connection)
+- 停 API → 重跑(4 分鐘多)→ 重啟 API
+- 結果：413 set / 21,257 卡(原 16,367、+4,890)、**M5 (id=588) total_visible=81**、artofpkm_cards 81 張 ✓
+
+**5. ONBOARDING.md 寫好**(team-onboarding skill 產出、未 commit、user 暫不需 share)
+
+#### 進行中 / 待做
+
+- **Plan Task 5-22 需要重寫**：基於「pokemon-card.com 取列表」假設過時、要改成「新 set artofpkm 為主、舊 set pokemon-card 為主」雙路線設計
+- **M5 artofpkm 81 卡未搬進 jp_card_list_set + jp_card_list**：要寫一次性腳本搬(可以先做這個解燃眉之急、Plan 重寫之後再做 reusable system)
+- **SNKR 熱門 top 10 仍只 0-1 張 mapped**：因 M5 dominate、M5 進 DB 後預估 mapped 提升到 7-8/10
+- **`app/database.py` 工作目錄有小修改未 commit**(2 行、其他主要 SNKR 熱門相關已被 user 在 PM session commit `602ec63` 處理)
+
+#### 踩到的坑(已加進上方 Known Pitfalls)
+
+新加 6 條(在 Known Pitfalls section、見頂部):
+- pokemon-card.com 搜尋頁 JavaScript 驅動、HTML 無 inline / dropdown JS array
+- pokemon-card.com `?expansionCodes=N` 503 擋
+- pokemon-card.com 日文 NFD vs NFC 差異
+- `scrape_artofpkm.py` 跑 DROP TABLE 撞 cards.db lock
+- artofpkm `total_visible=0 + release_date=NULL` 不代表 artofpkm 沒收、可能是 stale data
+- AskUserQuestion 寫亂 / 打錯字、既有 hook 抓不到
+
+#### 明天的下一步
+
+1. **寫一次性腳本搬 artofpkm M5 → jp_card_list(54 → 954)+ jp_card_list**(30-60 分鐘)、立即解燃眉之急讓 user 點 SNKR 熱門 M5 卡跳本站詳情
+2. **Plan Task 5-22 重寫**(用「新 set artofpkm / 舊 set pokemon-card」分流策略)、之後再 dispatch subagent
+3. **拆 commit + 整理 untracked**(`ONBOARDING.md` / `app/database.py` 小修)
+4. 候選方向：71 張高稀有度 0-row eBay verify / Portfolio Phase 2 後端 API / MVP S1 auth KYC / GoldenGem Phase A 自選頁(都是 5/22 起累積待動方向)
 
 ---
 

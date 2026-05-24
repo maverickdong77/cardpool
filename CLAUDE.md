@@ -193,6 +193,13 @@ $pid_=(netstat -ano | findstr ":8000 .*LISTENING").Split()[-1]; taskkill /F /PID
 ### 決策
 - **做決定前先提問、不要猜 user 想法、不要沒問就動手做大決定**：規劃 / 設計過程中遇到「砍 feature / 改範圍 / 改方向 / 加減 phase / 重排優先序」這類**有方向性的決策**，即使分析非常清楚、即使 user 看了 99% 會同意、也要先用 `AskUserQuestion` 拿到確認再動。決策權屬於 user、我的角色是分析 + 給建議 + 列選項 + 提出強烈推薦。AskUserQuestion 可以同時列「我推薦的選項」+「其他可行選項」、讓 user 可選但不替他決定。「先做了再讓 user 改」≠「先問再做」、前者讓 user 感覺被剝奪選擇權。例外：純技術細節（變數命名、import 順序、語法選擇）不用每個都問。
 
+### 資料來源優先序（2026-05-25 升級）
+- **遇到資料來源衝突時（卡名 / 卡圖 / 卡號 / set 內容 等），優先採信日本官方 `pokemon-card.com`**（已 mirror 到 `jp_card_list` 表 + `thumb_url` 欄）。
+- artofpkm.com / pokellector / Bulbapedia 等第三方來源**只當輔助、不當 source of truth**。實證：2026-05-25 發現 artofpkm 對某些 jp set（Pokemon-151 / Shiny-Treasures-ex / VSTAR-Universe 等）image_url 順位整套偏移、且對 Dark-Phantasma / Galactics-Conquest / Awakening-of-Psychic-Kings 等 set 直接「整套打散重組」、收的卡列表跟官方完全不同。`name_jp` 多半對、但 `image_url` 不可信、`card_number` 跟官方不同步。
+- 例外：對 `jp_card_list` 沒覆蓋的 set（promo set XY-P / SwSh-P / BW-P 等舊期 promo、或老 random pack 像 2009 movie / battle starter pack），需要其他來源時、優先順序：**pokemon-card.com `details.php/card/{id}` 個別卡頁 → Bulbapedia `|jname=` 驗證 → pokellector → artofpkm**。
+- SNKR / eBay 賣家標的 `set_code` / `card_number` 信任度跟 `jp_card_list` 同級（賣家依官方規格標、跟官方一致），可用來輔助確認 `(set_code, card_number)` 對映。
+- 未來新增爬蟲 / sync endpoint **一律用 jp_card_list 風格的 `(pg, card_number)`** 寫入 `card_prices`、不用 card_list 的 `(set_id, card_number)` slug（後者錯位風險高）。
+
 ### Git
 - **Commit 要按語意拆、不要混**：開始 commit 前先用 `git diff --numstat` / `git log --oneline` 確認哪些是這次工作、哪些是之前累積的未 commit 改動。多個語意的改動分多個 commit、不混進同一個。拆 commit 用「備份混合狀態 → checkout HEAD → 重做本次改動 → 產 patch → 還原混合 → `git apply -R` 拆出舊改動」這套 patch 法。
 
