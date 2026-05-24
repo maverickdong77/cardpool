@@ -63,12 +63,20 @@
 - **`scrape_artofpkm.py` 跑 `DROP TABLE` 撞 cards.db 寫鎖**：5/24（凌晨延伸）撞到 — 重抓 artofpkm 拿 M5 卡資料時、`init_tables()` 內 `DROP TABLE IF EXISTS artofpkm_sets; DROP TABLE IF EXISTS artofpkm_cards; CREATE TABLE...` 在 cards.db 上 fail with `database is locked`、因 FastAPI backend (run_api.py) 一直開著 connection、WAL mode 也擋 DROP TABLE。**修法**：重抓前先 `Stop-Process` API、跑完再啟。**通則**：任何用 `DROP TABLE` 重建表的腳本要先停 API。或者改寫 `scrape_artofpkm.py` 用 `DELETE FROM` + `INSERT OR REPLACE` idempotent 模式、不 DROP TABLE。
 - **artofpkm 對新 set `total_visible=0 + release_date=NULL` 不代表沒收、可能是 stale data**：5/24（凌晨延伸）撞到 — 看 artofpkm_sets WHERE id=588(M5 アビスアイ)發現 total_visible=0、原以為「artofpkm 還沒收 M5」、其實是上次 scrape 時間 5/7、那時 M5 還沒發行(M5 是 2026 後期)、artofpkm 只 placeholder 一個 set 名。**修法**：重跑 `scrape_artofpkm.py` 取最新狀態、跑完看 total_visible 才知道 artofpkm 有沒有實際收。**通則**：DB 內 `total_visible=0` 對最新 set 不可信、要看 `MAX(scraped_at)` 跟 set release_date 比較才能判定「真的沒收」vs「stale」。
 - **card_list jp 系列 image_url 整套錯位、name_jp 卻是對的**：5/25 撞到 — user 報 jp-Japanese-XY-Promos #75 「皮卡丘的圖配噴火龍 EX 的名字」。Audit 發現 26 個 set / ~3,250 卡 image_url vs name_jp 對不上、其中 16 個 set 是整套錯位（≥80% mismatch）。Root cause：2026-04-28 整合 artofpkm 卡圖時假設「artofpkm 順位 = 卡號」、但 artofpkm 對某些 set 多收了 reverse holo 變體 / 1ED 變體、整套順位從某個位置開始偏 1-2 格、累積到後段嚴重錯位。**修法**：用 jp_card_list.thumb_url 補回（jp_card_list 是 5 月後從 pokemon-card.com 日本官方爬的、卡名 + 圖 100% 對齊）、只 UPDATE image_url、不動 name_jp。**通則**：用 artofpkm 整合的 image 對「擴充包」可信、對含變體的高級擴充包（SAR/SR/UR/AR 多）整套不可信、要用 jp_card_list 對齊。
+- **Camoufox (改造版 Firefox + C++ 級 fingerprint 偽裝) 對 eBay 沒明顯優勢、不採用**：5/25 user 詢問 jo-inc/camofox-browser repo、評估後做 POC。安裝 camoufox 0.4.11 + Firefox 135.0.1-beta.24 (530MB) 在 embedded Python 3.14 沒問題。POC 結果分 2 階段：(a) 不加 warmup → Akamai CDN 直接拒絕 (Access Denied 458 bytes、`errors.edgesuite.net` reference)；(b) 加 ebay 首頁 warmup (停 3s) → 過 Akamai、單張卡可抓 188-247 listings。但 dry-run 3 張對比 prod 5/24 同 query (`Japan {set_name_en} {en_name} {rarity} PSA 10`)：兩邊都得 count=242 同樣 padding 廣告、Camoufox 反多一張 splashui_blocked (0.9s 秒擋、可能 Firefox beta 版被 Akamai 標記)。POC「Camoufox 抓 247 vs prod 8」是 query 不公（prod 用 PSA-label v2 strict、5/24 user 用 loose query 也得 244）+ session/IP 隨機性造成、非 browser 差異。**結論**：對 eBay 不採用、保留現有 `app/scraper/ebay.py` (Chromium + playwright-stealth + deep warmup + retry-on-signin) + `_resilient_backfill.ps1` 救護車。POC 檔案 `_camoufox_poc.py` / `_camoufox_recrawl_54.py` / `_camoufox_recrawl_54_results.json` 留作未來參考、`.gitignore` 已排除。**未來預設動作**：若 eBay 反爬再升級、考慮順序仍是 (A) playwright-stealth deep warmup → (B) residential proxy → (C) eBay 官方 API → (D) 換掉 eBay 資料源、不再回頭試 Camoufox 系列 stealth Firefox。除非 eBay 改用對 Firefox 比 Chromium 寬鬆的 anti-bot policy（目前相反）。
 - **jp_card_list 完全不收 promo set (XY-P / SwSh-P / SV-P 9001 例外)**：5/25 撞到 — 修圖過程發現 jp_card_list 對 XY-P 0 卡、對 SwSh-P 也是 0 卡。但 SV-P 卻在 jp_card_list_set pg=9001 / 9002（朱紫 + MEGA promo）有資料。**結論**：jp_card_list 只覆蓋擴充包 + 部分新期 promo (9001/9002)、不收老期 promo (XY-P / SwSh-P / BW-P 等)。**影響**：image-fix-jp-artofpkm 腳本對 16 受害 set 只能補 9 個（擴充包）、其餘 7 個（含 user 最初報的 XY-P）無 jp_card_list 來源、需另想對策（pokellector 個別頁 / pokemon-card.com details.php 個別卡 / 維持原圖暫忍）。**通則**：用 jp_card_list 當 image source 前要查 `set_code` 在 jp_card_list 是否存在、promo set 多半 0 卡。
 - **audit script 比對 romaji 必先 normalize 兩種 IME 拼法 + 雙寫消音**：5/25 撞到 — v1 audit 比 image filename vs pokemon_dict.romaji 算錯位率、初版報「26 set 受害、18 個整套錯位」。但 sample 含 false positive 案例：`ピカチュウ` 可以拼 `PIKACHUU` 也可拼 `PIKACHIXYUU`（CHI-XYU IME 寬鬆模式拗音）/ `レックウザ` 可拼 `REKUUZA` 或 `REKKUUZA`（雙寫消音）。v2 加 normalize（XYU↔YU、XYO↔YO、XYA↔YA、KK→K、SS→S、UU→U、OU→O）後、整套錯位數從 18 → 16、全對齊從 16 → 70。**通則**：對 artofpkm romaji 比對前必 normalize、不然 false positive 干擾判斷。
 - **card_prices 表 jp- prefix vs 純數字 pg 雙系統並存、同 set 重複資料**：5/25 順手發現（沒修） — card_prices 有 51 萬 row 用 `jp-XXX` 風格 set_id、37 萬 row 用純數字 `pg` 風格 set_id（如 `882` vs `jp-Pokemon-151`）。同一 set 在兩種 prefix 下都有資料：Pokemon-151 在 `jp-Pokemon-151` 有 20,094 row、在 `882` 有 20,529 row。Root cause：歷史 sync code 用 card_list.set_id (artofpkm 風格 'jp-Pokemon-151')、5 月後 sync_snkr / sync_ebay 改用 jp_card_list.pg (純數字 '882')、雙路寫入 card_prices 同 UNIQUE 鍵不同 set_id。**影響**：(1) 同一 set 價格資料分裂兩處、API 查詢用哪個 set_id 決定看到哪批 (2) 浪費 ~37 萬 row 重複空間 (3) 未來 SNKR / eBay sync 不一致。**未修**：合併要先決定 source of truth (建議 pg 風格、因為 jp_card_list 才是 canonical)、再 cascade UPDATE card_prices.set_id、然後 dedupe UNIQUE 衝突 row。預估 1-2 hr 工作量。**通則**：未來新增爬蟲 / sync endpoint 寫 card_prices 一律用「真實官方卡號 (jp_card_list 風格)」、不用 card_list slug。
 - **artofpkm 對某些 set 不只「順位偏移」、是「整套打散重組」**：5/25 撞到 — 處理 jp-Dark-Phantasma / jp-Galactics-Conquest / jp-Awakening-of-Psychic-Kings 3 個 set 時、原以為跟其他 9 set 一樣「順位偏移」、實際 dry-run 發現 artofpkm 對這 3 set 收的「卡列表」跟日本官方該 set **完全不同**：Dark-Phantasma 100 卡只 48 卡在官方 set 內、Galactics-Conquest 96 卡只 3 卡在、Awakening 88 卡只 4 卡在。其他 ~200 row 是 artofpkm 自己亂分類來別 set 的卡。判別法：用 `name_jp` 反查 jp_card_list 看分佈在哪些 pg、若**散在 5-10 個不同 pg**（如 Dark-Phantasma 散在 pg=858/7/3/2/24/25/19/20/10）就是「整套打散」。**修法**：DELETE artofpkm orphan row + UPDATE 對得上的 image_url。5/25 共 DELETE 229 row + 2,067 row card_prices orphan。**通則**：對「artofpkm 整合的 jp set」要先做 name_jp 反查 + pg 分佈 sanity check、判別是「順位偏移」(集中在 1 個 pg) 還是「整套打散」(散在多 pg)、後者 row 多數要 DELETE。
 - **AskUserQuestion option 寫亂(打錯字 / 半生不熟句子)、既有兩個 hook 抓不到**：5/24（凌晨延伸）違反多次 — 既有 `.claude/hooks/check_traditional_chinese.ps1` 偵測簡體 / 日文整段 / 英文整段、`check_question_plain.ps1` 偵測 30 個英文黑話詞、但對「打錯字(『折黃』『抽頻』『素雜折』)、半生不熟句子(『跡 daily backfill 不合』)」這種**詞義不清**的中文錯亂、**hook regex 抓不到、要 LLM judge 才能擋**。本次 session 我寫 5-6 個 AskUserQuestion option 都這樣、user 反覆抱怨「不是繁體中文」「整理一下」。**Future LLM session 嚴守規則**：寫每個 AskUserQuestion option label / description 前、把該段文字念一遍(內部模擬)、確認每個詞中文通順、無打錯字、user 第一次讀就懂。**通則**：hook 是補強、不是替代。LLM 自己寫白話才是主要防線、hook 只擋低階錯。
 - **Bulbapedia Setlist/entry template 對不同卡型有多種變體、parser regex 不能 hardcode 一種**：5/25 撞到 — M5 wikitext parse 用 `\|J\|` hardcode separator、漏抓 5 卡 (102/103/107 trainer 卡用 `|I|` separator、80/81 Energy 卡內嵌雙 `{{TCG ID}}` template + `{{e|Lightning}}` 中間元素)。**修法**：用 line-based + `[JI]` 兼容 + lazy match 抽 first TCG ID + trailing template + 最後 3 個 `|` 切 type/subtype/rarity。實證對 M5 從 113 卡 → 118 卡 (100%)。**通則**：未來爬其他 Bulbapedia set 也適用、entry template 變體要先 sample 幾類卡 (Pokemon / Trainer / Item / Energy / Stadium) 看格式、parser 設計成 line-based 不是單一 regex。**Bulbapedia mediawiki API page param `'` apostrophe 不要 URL encode**（5/25 同期撞到、合進此條）— 用 `%27` 撞 invalidtitle、直接 `'` 才能 hit、`Gladion's_Showdown_(Abyss_Eye_76)` 拿到「グラジオの決戦」。
+- **Bulbapedia Cloudflare 對 httpx + headless playwright 雙擋（user-data-dir persistent_context 才繞）**：5/25 PM 補 trainer 中文翻譯撞到 — httpx 直接 GET trainer wiki 頁 403、headless playwright 全 timeout / Cloudflare challenge page。**修法 1**：用 `launch_persistent_context(user_data_dir=MCP_CHROME_DATA_DIR)` 繼承 MCP playwright 通過的 Cloudflare cookie state、能繞但要先 kill MCP chrome（singleton 衝突）。**修法 2（更務實）**：換來源到 [52poke 神奇寶貝百科](https://wiki.52poke.com/)、對 httpx 直接 200 OK、page title 內第一段就是繁中譯名。52poke 為主、Bulbapedia 輔。**通則**：未來爬中文翻譯一律先試 52poke、Bulbapedia 留給冷門 / unique 角色名比對用。
+- **52poke 有「遊戲人物列表（在其他語言中）」總對映表 cheat code**：5/25 PM 撞到 — 個別 fetch 121 個 trainer page 才補 24 個、但這個總頁 1 個 fetch 含 488 條 EN/JP/繁中對映 + 100% 命中（trainer / professor / champion / villain / 等）。比個別 fetch 快 100x、quality 也好（officially curated table）。**通則**：未來補中文翻譯先試「總對映 cheat 表」、再 individual fetch。對 Pokemon 中文站、`{遊戲|動畫|寶可夢}人物列表（在其他語言中）` 是 well-known cheat URL pattern。
+- **Plus Jakarta Sans 字體最大字重 800、CSS 設 font-weight:900 會跑 synthetic bold**：5/25 撞到 — set 標題 .sec-hd h2 跟卡名 .ci-name 都設 weight 900、但 Google Fonts 載入的 Plus Jakarta Sans 只到 800、瀏覽器拿不到 900 字檔就跑「人工加粗」（synthetic bold）。不同字級下加粗演算法產生不同視覺效果、user 看了覺得「字體不一致」。**修法**：兩個都改 font-weight: 800（用真實字檔、避開 synthetic）。**通則**：CSS 設 font-weight 前先查 Google Fonts 字體實際載入哪些字重、超過範圍會 synthetic、不同字級下視覺不同。
+- **jp_term_dict 27 條 name_zh 欄填日文 katakana 當「翻譯」（v1 反查 garbage 風險）**：5/25 PM 撞到 — character_dict v1 反查 Acerola 抓到「アセロラ」當中文、user 看到才發現。Root cause：jp_term_dict 建表時有 27 條條目沒 ZH 翻譯、就把 name_jp copy 到 name_zh 欄當「翻譯」。**修法**：jp_term_dict 內 name_zh 含日文 kana（U+3041-30FF）的全 SET NULL、改成「沒翻譯」狀態（caller 跳過、不假裝翻好）。**通則**：translation dict 內「沒譯到的條目」要 SET NULL、不要 copy name_jp 假裝有譯；建表腳本要加 quality assurance check（reject name_zh 含 JP kana 的 row）。
+- **set 詳情頁 setTitle 抓 set 名邏輯用 state.lang、hash URL 直跳時抓不到**：5/25 PM 撞到 — renderSet 用 `apiCached('sets:'+state.lang, ...)` 抓 setMeta、若 user 直接從 URL `#/set?set=me2pt5` 進入（state.lang 還是預設 jp）、抓到 JP set list 找不到 me2pt5、setTitle fallback 用 set_id 自己（顯示「me2pt5」而非「Ascended Heroes」）。**修法**：偵測 set_id 推語言（純數字→jp / 小寫→en / 大寫→tw）、用對應 lang 抓 setMeta、不依賴 state.lang。**通則**：前端任何 view 用 state.lang 抓資料前、自問「user hash URL 直跳時 state.lang 一定對嗎？」、若不一定、用 ID 本身推語言更穩。
+- **character_dict schema 缺 name_zh 欄、要 ALTER TABLE 才能存中文**：5/25 PM 撞到 — 原 schema 只 id/name_en/name_jp/romaji/image_url（315 年前 build_translate_dict.py 沒考慮中文）、補中文翻譯前要 `ALTER TABLE character_dict ADD COLUMN name_zh TEXT`。**通則**：translation dict 系列表（pokemon_dict / character_dict / jp_term_dict 等）schema 不一致、有的有 name_zh 有的沒、要操作前先 PRAGMA table_info 看欄位再決定加 / 直接寫。
+- **`_RARITY_TO_EBAY` dict 漏 MA 稀有度（超級進化系列新引入）**：5/25 讀 52poke wiki 17 個系列頁發現 — 超級進化系列（MEGA、2025/2/27 公開、對應 pg=9002 M-P / 949 M2 / 950 M2a / 952 M3 / 953 M4）同時引入兩種新稀有度 **MUR** 跟 **MA**。CLAUDE.md `_RARITY_TO_EBAY` dict 列了 MUR、**漏 MA**。**影響**：未來爬 M3 / M4 等 set 的 MA 卡時、query 不會把 MA 對應的英文全名加進去、降低 recall（可能 0-row）。**修法**：找一張實際 MA 卡的 PSA label 看英文全名是什麼（候選：`MEGA ART RARE` / `MASTER RARE` / 其他、不要猜）、加進 `_RARITY_TO_EBAY` dict。**怎麼發現**：5/25 跑 backfill 後若 verify report 看到 MA 稀有度 0-row 卡、就是該補 dict 的訊號。**對應 [[reference_ptcg_series_mechanics]]**。
 
 ---
 
@@ -1306,6 +1314,195 @@ PreToolUse on AskUserQuestion、偵測簡體 / 日文整段 / 英文整段、有
 3. **Plan Task 5-22 重寫**（用「新 set artofpkm / 舊 set pokemon-card」分流策略）— 5/24 凌晨延伸 todo、可在 M5 hands-on 經驗上重做。預估 2-3 hr
 4. **跟上 5/25 凌晨段未動方向**：(a) XY-P #75 修圖（user 最初報的 bug、優先）(b) 🟠 10 個部分錯位 set 用 Phase 1 strategy 修 (c) card_prices jp-/pg 雙系統合併
 5. **延續未動方向**：71 張高稀有度 0 row eBay verify / Portfolio Phase 2 後端 API / MVP S1 auth KYC / GoldenGem Phase A 自選頁
+
+### 2026-05-25（PM-晚）— EN 卡表中文化全套 + character 圖鑑 100% 補齊
+
+延續 5/24 開工方向、user 選「EN 卡表整理 按發售日期排序」、做完整套 EN→ZH 翻譯管線 + EN set 期別分組 + character 訓練家頁圖 / 翻譯雙線 100% 達標。
+
+#### 完成
+
+**1. EN 卡表 series 期別分組 + 跳轉下拉（仿 scrydex）**
+- `..\卡波\index.html` renderSets EN 模式：17 個 series 期別分組（Mega Evolution / SV / SwSh / Other / ... / Base 共 17 期、含中文名 SERIES_ZH dict）
+- 預設第一期展開、其餘收起、點期別 title 開合
+- 跳轉下拉 jumpToEra 同 JP 模式
+- backup `..\卡波\index.html.before-en-series-grouping-20260523-192039`
+
+**2. 補爬 me4 Chaos Rising + mep Mega Evolution Black Star Promos**
+- me4 Chaos Rising：`python en_collector.py me4` 從 pokemontcg.io 1 set + 122 卡寫入
+- mep Mega Evolution Black Star Promos：pokemontcg.io 還沒收錄、寫 `_collect_mep.py` 用 Bulbapedia 75 卡命名 + pokellector 40 卡 image 合併、寫進 en_card_list_set + en_card_list（pokellector 對未掃描的 41 卡無圖、留 NULL）
+
+**3. 修 /api/prices/{set_id}/{card_number} EN fallback bug**
+- Root cause：endpoint 只查 card_list（artofpkm 風格 set_id）+ jp_card_list、不查 en_card_list、me4 / mep 等新 EN set 進詳情頁全空白
+- 加 Path 3 EN fallback：JOIN en_card_list + en_card_list_set、填 card_meta 含 name / image / rarity / hp / illustrator / set_name 等
+- backup `app/main.py.before-en-card-fallback-20260524-013649`
+
+**4. `_translate_en_card_name_to_zh` helper（4 段 fallback、新 set 100% 命中）**
+- Step 0：`_EN_NAME_ZH_OVERRIDE` hardcode 表（3 條新能量卡：泡沫水能量 / 燃料火能量 / 磁鐵鋼能量、Bulbapedia Cantonese 來源）
+- Step 1：pokemon_dict.name_en COLLATE NOCASE 直查
+- Step 2：剝 Mega 前綴 + ex/V/VMAX/VSTAR/GX 後綴 + Mega X/Y 形態（如 Mega Charizard X → 超級噴火龍X）
+- Step 3：jp_term_dict.name_en 查 trainer / energy / item
+- 整 me4 122 卡 / mep 75 卡命中 **100%**
+- helper 同步進 set 卡片列表（app/database.py `get_cards_by_set` EN 路徑）+ 詳情頁 fallback（app/main.py Path 3）
+
+**5. set 列表頁卡名兩行格式（英 + 中、同字體）+ 卡號區 3 欄 pill**
+- `..\卡波\index.html` cardItemHtml：兩個 `<div class="ci-name">`、共用同 class
+- CSS line-clamp 從 2 改 1、font-weight 設 800（避開 Plus Jakarta Sans synthetic bold）
+- 卡號區改 3 欄（稀有度 pill / `#`卡號 / set 名豎線分隔）+ 13 種稀有度配色（C 灰 / R 橘 / RR 金 / SR/SAR 紅紫漸層 / UR 紫 / M 藍紫 等）
+- backup `..\卡波\index.html.before-card-item-zh-20260524-022732`
+
+**6. set 詳情頁 setTitle 顯示 set_id bug 修**
+- Root cause：renderSet 用 `state.lang` 抓 setMeta、user 從 hash URL 直跳時 state.lang 可能不對
+- 修法：偵測 set_id 推語言（純數字→jp / 小寫→en / 大寫→tw）、用對應 lang 抓 setMeta
+- setTitle: `me2pt5` → **Ascended Heroes** ✓
+
+**7. character_dict trainer portrait 圖 47/317 → 317/317（100%）**
+- 寫 `_collect_character_portraits.py`、從 artofpkm.com/characters/{id} 爬 portrait blob URL
+- character_dict.id 跟 artofpkm /characters/{id} 數字完全對應（已驗證 Acerola=164）
+- 270 個 fetch × 0.3s ≈ 90 秒、100% 命中 0 fail
+- backup `cards.db.before-trainer-portraits-20260524-033224`
+
+**8. character_dict 中文翻譯 0/317 → 317/317（100%、5 輪迭代）**
+- ALTER TABLE 加 name_zh 欄
+- v1 jp_term_dict 反查：186 個
+- v2 Bulbapedia（headless / persistent_context）：47 個但 quality 差（抓配音員 / 集名）→ rollback
+- v3 52poke.com 個別 page title：+92 個 quality 高（87%）
+- v4 52poke「遊戲人物列表（在其他語言中）」一頁全表 build dict：+24 個（95%）
+- v5 hardcode 剩 15 個（Ash Ketchum→小智、Team Rocket Grunt→火箭隊手下 等官方繁中標準名）
+
+**9. character 頁三行格式（中 / 日 / 英 置中）+ 主顯中文**
+- renderCharacterList：主標 name_zh（如有）、第二行 name_jp、第三行 name_en
+- /api/category/character/list endpoint 加 name_zh 欄、ORDER BY COALESCE(name_zh, name_en)
+- CSS .pokedex-item 已 text-align:center、加 .pi-name-en class（10px / 灰）
+
+**10. 修 Acerola アセロラ → 阿塞蘿拉 + jp_term_dict 27 條日文 garbage SET NULL**
+- jp_term_dict 27 條 name_zh 欄填日文 katakana 當「翻譯」全 SET NULL（避免未來 v1-like 反查再撈到）
+- character_dict #164 Acerola → 阿塞蘿拉（標準 Pokemon TCG 繁中譯名）
+
+#### Commit
+
+- `81063f0` docs+db: 5/25 凌晨 image_url 整改 + 資料來源優先序（user 5/25 凌晨工作）
+- `7cfb5e4` main(category): /api/category/character/list 加 name_zh 欄 + 按中文名排序
+
+前端 `..\卡波\index.html` 在 sibling 目錄、不入這個 repo、改動只 backup local。
+
+#### 進行中 / 待做
+
+- 5/25 凌晨 user 未動方向：XY-P 修圖（user 最初報的 bug）/ 10 部分錯位 set 修 / card_prices jp-/pg 雙系統合併
+- Pitch Black set（2026/07/17 發售）— 等 pokemontcg.io 收錄一鍵 `python en_collector.py me5` 爬
+- mep 35 張無圖卡 — 等 pokellector 掃齊或 pokemontcg.io 收錄
+- character_dict 4-5 個冷門角色（Naomi 七瀨 / Scottie 小馨 / Lear 萊亞 等）譯名是 best guess、user 後續可改
+- mep set 封面 logo_url=NULL（待補）
+- 71 張高稀有度 eBay 0 row 卡 user verify（5/22 留下）
+
+#### 踩到的坑（新加 7 條到上方 Known Pitfalls）
+
+詳見上方 Known Pitfalls 區段、新加：
+- pokellector 主頁只列已掃描卡（mep 81 → 實列 40）
+- 前端 cacheStore 不被 page reload 自動清光
+- Plus Jakarta Sans 字體最大字重 800、設 900 會 synthetic bold
+- Bulbapedia Cloudflare 對 httpx + headless playwright 雙擋（52poke 為主、Bulbapedia 輔）
+- 52poke 「遊戲人物列表（在其他語言中）」是總對映 cheat code
+- jp_term_dict 27 條 name_zh 填日文 katakana garbage
+- set 詳情頁 setTitle 用 state.lang、hash URL 直跳抓不到
+- character_dict schema 缺 name_zh 欄要 ALTER
+
+#### 明天的下一步
+
+1. **小收尾**：
+   - 把 `*.png` 加進 `.gitignore`（debug 截圖不要列 status 干擾）
+   - 監看 pokemontcg.io 何時收 mep / Pitch Black、收了一鍵 `python en_collector.py {id}` 補
+2. **延續 5/25 凌晨 user 未動方向**：(a) XY-P #75 修圖（user 最初報的 bug、優先）(b) 🟠 10 個部分錯位 set 用 Phase 1 strategy 修 (c) card_prices jp-/pg 雙系統合併
+3. **跳長期方向**：(a) MVP S1 auth 後續 SMS provider / KYC endpoint / role 提權 (b) GoldenGem Phase A 自選清單獨立頁 ~2-3hr (c) JP eBay 全量擴展到剩 ~20k JP 卡
+
+---
+
+### 2026-05-25（午後到晚）— SNKR 盒裝商品本站查價頁 feature 整套上線
+
+延續 user 看到 SNKR 熱門首頁 rank 1「アビスアイ ボックス ¥16,000」截圖、訴求「希望這種也要能夠像卡片一樣有查價頁面」。
+
+#### 完成
+
+**1. Spike 確認資料源可行（純 JSON API 不用 Playwright）**
+- 開 playwright 開 SNKR 盒裝 sales-histories 頁、log 所有 XHR、找到背後兩個 JSON endpoint：
+  - `GET /v1/apparels/{id}/sales-chart?range=all&salesChartOptionId={size_id}` → 歷史走勢 points 陣列
+  - `GET /v1/apparels/{id}/sales-history?page=1&per_page=20&size_id={size_id}` → 最近成交 list + minPrice
+- 兩個 endpoint bare curl 都 200 OK（無 auth、無 cookies、無 referer）
+- 盒裝有多個 size_id (24 個 = 對應「1個 / 2個 / ... / 24個」買幾盒)、預設取「1個」(salesChartOption[0].id) 對應一般用戶買 1 盒查價
+
+**2. sitemap 路線探索 → 走死、pivot SNKR 搜尋 paginated**
+- 試 jp-path sitemap 全 404、SNKR 沒提供盒裝專用 sitemap
+- en-path `/en/sitemap/sitemap-index-en-product-trading-card.xml` 有 5,250 URL 全 `/en/trading-cards/{id}`、**但這 ID 跟 apparel_id 是不同 namespace**、且 trading-cards/{id} 用 `/en/v1/products/SW---{id}/sizes` 電商買賣 endpoint、**沒 sales-history JSON 可用**
+- 改用 SNKR 搜尋頁 paginated（既有 `_scrape_snkr_hot_items` URL pattern、改 `sort=newest` + page 1-30、累積商品 + client filter is_box=1）
+
+**3. DB schema 新增 3 表（寫進 app/database.py init_db()）**
+- `snkr_box_items` (apparel_id PK, title, set_name_jp, box_type, image_url, default_size_id, min_price_jpy, last_synced_at, first_seen)
+- `snkr_box_prices` (id, apparel_id, size_id, price_jpy, sale_date_relative, sale_timestamp_ms, buyer_icon_url, UNIQUE(apparel_id, size_id, sale_timestamp_ms, price_jpy))
+- `snkr_box_chart_points` (apparel_id, size_id, ts_ms, price_jpy, PK(apparel_id, size_id, ts_ms))
+
+**4. Paginated box scraper (`_scrape_snkr_boxes.py`)**
+- URL pattern 同 hot scraper、改 `sort=newest` + paginate page=1-30、page 14 後 0 row 自動停
+- Client filter is_box=1 (title 不含 `[set_code N/T]` 卡編號格式)
+- box_type classifier (expansion_box / high_class_pack / reinforcement_pack / special_box / starter_deck / pack / other)
+- set_name_jp extractor (`「XXX」` 內第一段)
+- **抓到 51 個盒**（比 user 期望 200-500 少 — SNKR 搜尋只列「目前在售」、絕版 / 廣告盒沒列）
+- box_type 分布：expansion_box=23 / high_class_pack=7 / pack=6 / other=7 / special_box=3 / starter_deck=3 / reinforcement_pack=2
+
+**5. 後端 3 個 endpoint 加進 `app/main.py`**
+- `POST /api/box/{apparel_id}/sync` — 抓 sales-chart + sales-history、寫進 snkr_box_prices + snkr_box_chart_points、第一次 sync 自動從 salesChartOption[0] 取 default_size_id 存進 box_items
+- `GET /api/box/{apparel_id}` — 詳情 endpoint、回 meta + chart + history、24h auto-sync（lazy backfill、不 eager fire 51 個避免 SNKR rate limit）
+- `GET /api/boxes` — list 全 box (避開 `/api/box/{apparel_id}` route 衝突、改 plural)
+
+**6. 前端 `..\卡波\index.html` 加 `#/box?apparel_id=X` 詳情頁**
+- 新 route + `parseHash` + `navigate()` 支援 `apparel_id` 參數
+- 新 `goBox(apparelId)` helper + `renderBox()` view
+- 視覺：左 image / 右 標題 + box_type + set_name_jp + ¥當前最低出售價（醒目大字）+ 「↗ 去 SNKR 看商品」按鈕
+- Chart.js line chart（橙色 #ff6b35、響應式、tooltip 帶 ¥）顯歷史價走勢
+- 最近 20 筆成交 list（含 buyer icon + 相對時間 + 價格）
+- disclaimer「資料整理自 SNKR 公開 API・最後同步 X」
+
+**7. SNKR 熱門首頁 `loadTrendingCarousel` 三層 click fallback**
+- 1. 單卡 mapped (set_id + card_number) → 跳本站 `#/detail`
+- 2. is_box=1 且有 apparel_id → 跳本站 `#/box?apparel_id=X` (新增、解 user 主訴)
+- 3. 都沒對到 → fallback 跳 SNKR 商品頁
+- 「↗ SNKR」灰標只在第三層 fallback 才顯示
+
+**8. Verify**
+- M5 アビスアイ ボックス (806644)：13 chart points + 20 history rows + ¥15,979 最低價 ✓
+- MEGAドリームex ボックス (721913)：**194 chart points** + 20 history rows + ¥16,450（更老 set 有 6 個月歷史）✓
+- Lazy auto-sync：未事前 sync 的 box 第一次 GET 自動 trigger、`/api/box/721913` 直接拿到 194 點
+- 3 張 playwright screenshot 寄給 user verify UI
+
+#### 進行中 / 待做
+
+- **2 張單卡誤判 box** (apparel_id 141447 ピカチュウV-UNION RRR 跟 104784 ピカチュウ プロモ SV-P)：INDIVIDUAL_CARD_PAT regex 對 `[s8a 025-028/028]` 含 hyphen / `[001/SV-P]` 順序倒過來的格式漏 filter。修法：擴 regex 容 hyphen + 雙向順序
+- **51 比預期 200-500 少**：SNKR 搜尋只列「目前在售」、絕版 / 廣告盒 / 老 set 沒列。後續加 SNKR 老熱門排行歷史 batch 反查 / sort 多版本累積能多挖出來
+- **set_name_jp 抽取有 13 個 ?**：title 沒「」標記的 box（如「ポケモンカードゲーム クラシック」「VSTARユニバース」這類 set 名直接寫在後段）抽不到、影響顯示 group 跟搜尋
+- **screenshot 還沒收 user 反饋**：等 user 看完前端 UI 是否需 iterate
+- **未做**：snkr_hot_items 跟 snkr_box_items 沒 cross-reference — 後續加 `_refresh_snkr_hot_items` 內自動 INSERT 新 box 進 snkr_box_items（自然 daily 累積）
+- **拆 commit + ONBOARDING.md untracked + app/database.py 工作目錄改動**: 累積 5/24 + 5/25 兩天的、明天再整理
+
+#### 踩到的坑（已加進上方 Known Pitfalls）
+
+新加 4 條：
+
+- **SNKR Vue 3 SPA 盒裝頁背後有純 JSON API (`/v1/apparels/{id}/sales-chart` + `/v1/apparels/{id}/sales-history`) 無 auth bare curl 直接 200**：spike 過程發現、不用 Playwright render。**通則**：對任何 SNKR Vue SPA 頁面、先用 playwright network listener 找 XHR、看背後 JSON endpoint 能不能 bare curl；找到 → 純 httpx，找不到 → 退 Playwright render
+- **SNKR `/en/trading-cards/{id}` 跟 `/apparels/{id}` 是不同 ID namespace、trading-cards 是電商買賣 view (sizes/variations/wishlists) 不是查價 view**：trading-cards/{id} 沒 sales-history endpoint。**通則**：SNKR 有兩套 ID 系統、要查價走 apparels namespace、不走 en/trading-cards namespace
+- **SNKR 沒提供盒裝專用 sitemap (jp-path 全 404、en-path 只有 trading-cards 但 ID 對不上)**：要抓全盒裝 list 只能用 SNKR 搜尋頁 paginated (`/search?brandIds=pokemon&...&page=N`)、預期 cap 在 page 14 (51 個 box 而非預期的 200-500)。**通則**：SNKR 對盒裝商品系統性收錄能力有限、絕版 / 廣告盒只能用熱門排行 daily 累積收
+- **FastAPI route ordering：`/api/box/{apparel_id}` 攔截 `/api/box/list` 變成 apparel_id='list' 數字 parse fail**：改 plural `/api/boxes` 避開、或把 fixed-path endpoint 宣告在 dynamic-path 前。**通則**：FastAPI route 用宣告順序、dynamic path (含 `{var}`) 要放後面、fixed path 放前面；要拿 collection 統一用複數 `/api/boxes`
+
+加 1 條 user behavior:
+
+- **AskUserQuestion option label 寫亂字、user 看不懂可能基於「最完整聽起來最對」做選擇、不一定 user 真懂 trade-off**：本 session 內違反 Pitfall #65 多次（「補取德上手」「全興」「抳全部」「永久剽個」「肍住」等）、user 連選 C 全拼可能因 option label 文字混亂。**通則**：寫每個 AskUserQuestion option 前內部模擬念一遍、確認每個詞中文通順、否則 user 選擇可能不是真正 informed decision；重大 effort decision 要 follow-up confirm 用最清楚的中文重問一次
+
+#### 明天的下一步
+
+1. **等 user 看 screenshot feedback**：UI 是否需 iterate（顏色 / 排版 / 按鈕位置 / 走勢圖橫坐標格式等）
+2. **修 2 個誤判單卡**：擴 INDIVIDUAL_CARD_PAT regex、重跑 `_scrape_snkr_boxes.py`、覆蓋 snkr_box_items
+3. **SNKR 熱門新熱門盒自動進 snkr_box_items**：`_refresh_snkr_hot_items` 內加：發現 is_box=1 + apparel_id 不在 snkr_box_items → INSERT；每天 SNKR 熱門爬一次 = 自然累積新盒
+4. **拆 commit + ONBOARDING.md untracked + database.py 工作目錄改動**：累積 5/24 + 5/25 兩天的、明天先 review 拆 commit
+5. **延續未動方向**（看餘裕）：71 張高稀有度 0 row eBay verify / Portfolio Phase 2 / MVP S1 auth KYC / GoldenGem Phase A 自選頁 / Plan Task 5-22 重寫
+
+---
 
 ### 2026-05-24（凌晨延伸）— SNKR 熱門首頁 + jp set backfill plan + artofpkm 重抓
 
