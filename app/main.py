@@ -3412,7 +3412,7 @@ async def category_character_list():
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """
-            SELECT cd.id, cd.name_en, cd.name_jp,
+            SELECT cd.id, cd.name_en, cd.name_jp, cd.name_zh,
                    COALESCE(
                      cd.image_url,
                      (SELECT cl.image_url FROM card_list cl
@@ -3422,7 +3422,7 @@ async def category_character_list():
                    ) AS image_url,
                    (cd.image_url IS NOT NULL) AS has_artofpkm
             FROM character_dict cd
-            ORDER BY (cd.image_url IS NULL), cd.name_en
+            ORDER BY (cd.image_url IS NULL), COALESCE(cd.name_zh, cd.name_en)
             """
         )).fetchall()
         return [
@@ -3430,6 +3430,7 @@ async def category_character_list():
                 "id": r["id"],
                 "name_en": r["name_en"],
                 "name_jp": r["name_jp"],
+                "name_zh": r["name_zh"],
                 "image_url": r["image_url"],
             }
             for r in rows
