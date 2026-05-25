@@ -149,6 +149,33 @@ class PSASession:
             return []
         return data.get("sales", []) if isinstance(data, dict) else []
 
+    # ---- populationSummary（真 PSA POP 存世量） ----
+    POP_API_URL = f"{PSA_BASE}/api/psa/researchJourney/spec/{{spec_id}}/PSA/populationSummary?filter=all"
+
+    def get_population_summary(self, spec_id: str) -> dict | None:
+        """打 PSA 官方 populationSummary API、回傳完整 POP dict 或 None。
+
+        回傳格式（成功）：
+        {
+          "total": {"totalCount": int},
+          "gemRate": float,
+          "grade10": {"totalCount": int},
+          "grade9": {"totalCount": int},
+          ... grade1..grade10 / grade1_5..grade9_5 / authentic
+        }
+        """
+        url = self.POP_API_URL.format(spec_id=spec_id)
+        try:
+            resp = self._page.request.get(url, timeout=20000)
+            if resp.status != 200:
+                return None
+            data = resp.json()
+        except Exception:
+            return None
+        if not isinstance(data, dict) or "total" not in data:
+            return None
+        return data
+
 
 # =========================================================
 #   Search query 建立 — set + 卡號
