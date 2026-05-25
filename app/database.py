@@ -578,6 +578,21 @@ def init_db():
         )
     """)
 
+    # ========== psa_pop_refresh_log：PSA POP lazy refresh 限速 (2026-05-26 加) ==========
+    # 每張卡 24h 內最多 2 次 PSA POP refresh、避免被 PSA 站擋
+    # 對應 spec: docs/superpowers/specs/2026-05-25-psa-pop-grading-recommender-design.md §5.3
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS psa_pop_refresh_log (
+            set_id      TEXT NOT NULL,
+            card_number TEXT NOT NULL,
+            refreshed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_psa_pop_refresh_log_card
+          ON psa_pop_refresh_log(set_id, card_number, refreshed_at)
+    """)
+
     conn.commit()
     conn.close()
 
