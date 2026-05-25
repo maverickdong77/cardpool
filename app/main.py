@@ -2012,6 +2012,81 @@ def _title_matches_card(title: str, card_name: str, card_number: str,
     return True
 
 
+async def _maybe_lazy_refresh_pop(set_id: str, card_number: str, pop_updated_at):
+    """超過 30 天 + 24h 內 < 2 次 refresh 才實際打 PSA。non-blocking。"""
+    from datetime import datetime, timedelta
+    import aiosqlite
+    # 30 天 fresh check
+    if pop_updated_at:
+        try:
+            ts = datetime.fromisoformat(str(pop_updated_at).replace("Z", "+00:00"))
+            if datetime.now() - ts.replace(tzinfo=None) < timedelta(days=30):
+                return
+        except Exception:
+            pass
+    # 24h 限速
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("""
+            SELECT COUNT(*) FROM psa_pop_refresh_log
+            WHERE set_id=? AND card_number=? AND refreshed_at > datetime('now','-24 hours')
+        """, (set_id, card_number))
+        n = (await cur.fetchone())[0]
+        if n >= 2:
+            return
+    # 觸發實際 refresh
+    try:
+        await _do_single_psa_pop_refresh(set_id, card_number)
+    except Exception as e:
+        print(f"lazy_refresh error {set_id}/{card_number}: {e}")
+
+
+async def _do_single_psa_pop_refresh(set_id: str, card_number: str):
+    """實際打 PSA + 寫 DB + log。run in threadpool to keep sync PSASession sync."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _sync_single_psa_pop_refresh, set_id, card_number)
+
+
+def _sync_single_psa_pop_refresh(set_id: str, card_number: str):
+    import sqlite3
+    from app.scraper.psa_apr import PSASession, build_search_query
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    row = conn.execute("""
+        SELECT cl.name, cl.name_jp, cs.name AS set_name, m.spec_id
+        FROM card_list cl
+        LEFT JOIN card_sets cs ON cs.set_id = cl.set_id
+        LEFT JOIN psa_apr_card_mapping m ON m.set_id=cl.set_id AND m.card_number=cl.card_number
+        WHERE cl.set_id=? AND cl.card_number=?
+    """, (set_id, card_number)).fetchone()
+    if not row:
+        conn.close(); return
+    name, name_jp, set_name, spec_id = row
+    with PSASession() as sess:
+        if not spec_id:
+            q = build_search_query(set_name or "", name or name_jp, card_number)
+            cands = sess.search_spec_ids(q)
+            spec_id = cands[0] if cands else None
+            if spec_id:
+                conn.execute("""INSERT OR REPLACE INTO psa_apr_card_mapping
+                    (set_id, card_number, spec_id, updated_at)
+                    VALUES (?,?,?,datetime('now'))""", (set_id, card_number, spec_id))
+                conn.commit()
+        if not spec_id:
+            conn.close(); return
+        pop = sess.get_population_summary(spec_id)
+    if pop:
+        g = lambda k: (pop.get(k) or {}).get("totalCount")
+        conn.execute("""UPDATE card_list SET
+            psa_pop10=?, psa_pop9=?, psa_pop8=?, psa_pop7=?, psa_pop6=?, psa_pop5=?,
+            psa_pop_total=?, psa_gem_rate=?, psa_pop_updated_at=datetime('now')
+            WHERE set_id=? AND card_number=?""",
+            (g("grade10"), g("grade9"), g("grade8"), g("grade7"), g("grade6"), g("grade5"),
+             pop["total"]["totalCount"], pop.get("gemRate"), set_id, card_number))
+        conn.execute("""INSERT INTO psa_pop_refresh_log (set_id, card_number)
+            VALUES (?,?)""", (set_id, card_number))
+        conn.commit()
+    conn.close()
+
+
 @app.get("/api/prices/{set_id}/{card_number}")
 async def get_card_prices(set_id: str, card_number: str):
     """取得卡片的價格歷史（會套用 listing_title 安全網過濾舊污染資料）"""
@@ -2024,7 +2099,7 @@ async def get_card_prices(set_id: str, card_number: str):
         cur = await db.execute(
             """SELECT cl.name, cl.name_jp, cl.name_zh, cl.image_url, cl.rarity, cl.rarity_ocr,
                       cl.psa_pop10, cl.psa_pop9, cl.psa_pop8, cl.psa_pop7, cl.psa_pop6,
-                      cl.psa_pop_total, cl.psa_gem_rate,
+                      cl.psa_pop_total, cl.psa_gem_rate, cl.psa_pop_updated_at,
                       cl.snkr_listing_count, cl.snkr_min_price_jpy, cl.snkr_listing_updated_at,
                       cs.name AS set_name, cs.set_code AS set_code, cs.total_cards AS set_total,
                       v.sales_7d, v.sales_30d, v.sales_all,
@@ -2077,6 +2152,7 @@ async def get_card_prices(set_id: str, card_number: str):
             "psa_pop6": row["psa_pop6"] if row else None,
             "psa_pop_total": row["psa_pop_total"] if row else None,
             "psa_gem_rate": row["psa_gem_rate"] if row else None,
+            "psa_pop_updated_at": row["psa_pop_updated_at"] if row else None,
             "snkr_listing_count": row["snkr_listing_count"] if row else None,
             "snkr_min_price_jpy": row["snkr_min_price_jpy"] if row else None,
             "snkr_listing_updated_at": row["snkr_listing_updated_at"] if row else None,
@@ -2351,6 +2427,15 @@ async def get_card_prices(set_id: str, card_number: str):
             except Exception:
                 orderbook[str(g)] = None
 
+        # Lazy refresh trigger: 30 天過期 + 24h 兩次限制、non-blocking
+        try:
+            asyncio.create_task(_maybe_lazy_refresh_pop(
+                set_id, card_number,
+                card_meta.get("psa_pop_updated_at") if card_meta else None,
+            ))
+        except Exception:
+            pass
+
         return {
             "set_id": set_id,
             "card_number": card_number,
@@ -2361,6 +2446,30 @@ async def get_card_prices(set_id: str, card_number: str):
             "sync_history": sync_history,
             "orderbook": orderbook,
         }
+
+
+@app.post("/api/psa/pop/refresh/{set_id}/{card_number}")
+async def manual_refresh_psa_pop(set_id: str, card_number: str):
+    """手動觸發 PSA POP refresh。受 24h 兩次限速。"""
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("""
+            SELECT COUNT(*) FROM psa_pop_refresh_log
+            WHERE set_id=? AND card_number=? AND refreshed_at > datetime('now','-24 hours')
+        """, (set_id, card_number))
+        n = (await cur.fetchone())[0]
+        if n >= 2:
+            return {"ok": False, "reason": "rate_limited", "next_available_in_hours": 24}
+    try:
+        await _do_single_psa_pop_refresh(set_id, card_number)
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute("SELECT psa_pop_updated_at FROM card_list WHERE set_id=? AND card_number=?",
+                                   (set_id, card_number))
+            r = await cur.fetchone()
+            ts = r[0] if r else None
+        return {"ok": True, "updated_at": ts}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
 
 
 def _hamming_hex(a: str, b: str) -> int:
