@@ -2032,7 +2032,28 @@ async def get_card_prices(set_id: str, card_number: str):
                       jcl.hp AS jp_hp, jcl.illustrator AS jp_illustrator,
                       jcl.types_json AS jp_types_json, jcl.attacks_json AS jp_attacks_json,
                       jcl.weakness AS jp_weakness, jcl.resistance AS jp_resistance,
-                      jcl.retreat_cost AS jp_retreat_cost, jcl.regulation_mark AS jp_regulation_mark
+                      jcl.retreat_cost AS jp_retreat_cost, jcl.regulation_mark AS jp_regulation_mark,
+                      (SELECT AVG(price_jpy)
+                       FROM card_prices
+                       WHERE set_id=cl.set_id AND card_number=cl.card_number
+                         AND source='snkrdunk'
+                         AND (psa_grade IS NULL OR psa_grade = 0)
+                         AND sale_date > datetime('now', '-90 days')
+                      ) AS snkr_raw_avg_jpy,
+                      (SELECT AVG(price_jpy) FROM (
+                         SELECT price_jpy,
+                                ROW_NUMBER() OVER (ORDER BY price_jpy) AS rn,
+                                COUNT(*) OVER () AS cnt
+                         FROM card_prices
+                         WHERE set_id=cl.set_id AND card_number=cl.card_number
+                           AND psa_grade=10
+                           AND sale_date > datetime('now', '-90 days')
+                       ) WHERE rn IN ((cnt+1)/2, (cnt+2)/2)) AS psa10_market_jpy,
+                      (SELECT COUNT(*)
+                       FROM card_prices
+                       WHERE set_id=cl.set_id AND card_number=cl.card_number
+                         AND psa_grade=10 AND sale_date > datetime('now', '-90 days')
+                      ) AS psa10_market_n
                FROM card_list cl
                LEFT JOIN card_sets cs ON cl.set_id = cs.set_id
                LEFT JOIN card_volume_stats v ON v.set_id = cl.set_id AND v.card_number = cl.card_number
@@ -2082,6 +2103,14 @@ async def get_card_prices(set_id: str, card_number: str):
             "resistance": row["jp_resistance"] if row else None,
             "retreat_cost": row["jp_retreat_cost"] if row else None,
             "regulation_mark": row["jp_regulation_mark"] if row else None,
+            "snkr_raw_avg_jpy": row["snkr_raw_avg_jpy"] if row else None,
+            "psa10_market_jpy": row["psa10_market_jpy"] if row else None,
+            "psa10_market_n": row["psa10_market_n"] if row else 0,
+            "psa10_market_source": (
+                f"db_psa10_90d_n{row['psa10_market_n']}"
+                if row and (row["psa10_market_n"] or 0) >= 5
+                else ("psa_official_fallback" if row else None)
+            ),
         } if row else None
 
         # Fallback: pg=950 / 9001 / 9002 / 9003 等尚未 INSERT 到 card_list 的 JP set，
@@ -2134,6 +2163,10 @@ async def get_card_prices(set_id: str, card_number: str):
                     "resistance": jrow["resistance"],
                     "retreat_cost": jrow["retreat_cost"],
                     "regulation_mark": jrow["regulation_mark"],
+                    "snkr_raw_avg_jpy": None,
+                    "psa10_market_jpy": None,
+                    "psa10_market_n": 0,
+                    "psa10_market_source": None,
                 }
 
         # Path 3 fallback: EN set (me4 / mep 等 en_card_list 表的資料、card_list / jp_card_list 都不含)
@@ -2201,6 +2234,10 @@ async def get_card_prices(set_id: str, card_number: str):
                     "resistance": None,
                     "retreat_cost": erow["retreat_cost"],
                     "regulation_mark": erow["regulation_mark"],
+                    "snkr_raw_avg_jpy": None,
+                    "psa10_market_jpy": None,
+                    "psa10_market_n": 0,
+                    "psa10_market_source": None,
                 }
 
         # JP set 補翻譯：若 name_zh 為空、用 _translate_jp_card_name_to_zh 算（path 1 / path 2 共用）
