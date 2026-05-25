@@ -809,25 +809,20 @@ def _parse_snkr_full_title(full_title: str) -> dict:
     return out
 
 
-async def _scrape_snkr_hot_items(limit: int = 30) -> list[dict]:
+async def _scrape_snkr_hot_items(limit: int = 100000, max_pages: int = 500) -> list[dict]:
     """爬 SNKR トレカ・ゲーム 熱門搜尋頁、解析完整商品資料（含盒子）。
+
+    多頁爬：page=1,2,3... 直到該頁無商品或達到 max_pages / limit 上限。
+    跨頁 dedupe by apparel_id（SNKR 熱賣排序可能重出同商品）。
+
+    分類涵蓋：searchCategoryIds=6（トレカ・ゲーム 根）+ 6/26 + 6/33 + 6/45（三個子分類），
+    比單一分類 6 多抓盒裝 / 單卡 / 周邊。
 
     回傳 list of {rank, apparel_id, title, price_jpy, image_url, is_box}。
     用 regex parse productTile anchor、不引 BeautifulSoup。
     """
     import re
     import httpx
-    url = ("https://snkrdunk.com/search?keywords=Pokemon+Card+Game+%E3%83%88%E3%83%AC%E3%82%AB"
-           "&searchCategoryIds=6&brandIds=pokemon&sort=hottest&page=1")
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0 Chrome/124"})
-            if r.status_code != 200:
-                return []
-            html = r.text
-    except Exception as e:
-        print(f"[snkr_hot] scrape err: {e}")
-        return []
 
     pattern = re.compile(
         r'href="(?:https://snkrdunk\.com)?/apparels/(\d+)"[^>]*aria-label="([^"]+)"[^>]*>([\s\S]*?)</a>',
@@ -835,42 +830,70 @@ async def _scrape_snkr_hot_items(limit: int = 30) -> list[dict]:
     )
     items: list[dict] = []
     seen_ids: set[int] = set()
-    for m in pattern.finditer(html):
-        apparel_id = int(m.group(1))
-        if apparel_id in seen_ids:
-            continue
-        seen_ids.add(apparel_id)
 
-        aria = m.group(2)
-        inner = m.group(3)
+    base_url = ("https://snkrdunk.com/search?keywords=Pokemon+Card+Game+%E3%83%88%E3%83%AC%E3%82%AB"
+                "&searchCategoryIds=6%2C6%2F26%2C6%2F33%2C6%2F45"
+                "&brandIds=pokemon&sort=hottest")
+    headers = {"User-Agent": "Mozilla/5.0 Chrome/124"}
 
-        title = aria
-        price_jpy: int | None = None
-        am = re.match(r"^(.+?)\s*-\s*¥([\d,]+)\s*$", aria)
-        if am:
-            title = am.group(1).strip()
+    async with httpx.AsyncClient(timeout=20) as client:
+        for page_no in range(1, max_pages + 1):
+            url = f"{base_url}&page={page_no}"
             try:
-                price_jpy = int(am.group(2).replace(",", ""))
-            except ValueError:
-                price_jpy = None
+                r = await client.get(url, headers=headers)
+                if r.status_code != 200:
+                    print(f"[snkr_hot] page={page_no} status={r.status_code}, 停止")
+                    break
+                html = r.text
+            except Exception as e:
+                print(f"[snkr_hot] page={page_no} scrape err: {e}")
+                break
 
-        image_url = None
-        img_m = re.search(r'<img[^>]+src="(https://cdn\.snkrdunk\.com/[^"]+)"', inner)
-        if img_m:
-            image_url = img_m.group(1)
+            page_added = 0
+            for m in pattern.finditer(html):
+                apparel_id = int(m.group(1))
+                if apparel_id in seen_ids:
+                    continue
+                seen_ids.add(apparel_id)
 
-        is_box = 0 if _is_individual_card(title) else 1
+                aria = m.group(2)
+                inner = m.group(3)
 
-        items.append({
-            "rank": len(items) + 1,
-            "apparel_id": apparel_id,
-            "title": title,
-            "price_jpy": price_jpy,
-            "image_url": image_url,
-            "is_box": is_box,
-        })
-        if len(items) >= limit:
-            break
+                title = aria
+                price_jpy: int | None = None
+                am = re.match(r"^(.+?)\s*-\s*¥([\d,]+)\s*$", aria)
+                if am:
+                    title = am.group(1).strip()
+                    try:
+                        price_jpy = int(am.group(2).replace(",", ""))
+                    except ValueError:
+                        price_jpy = None
+
+                image_url = None
+                img_m = re.search(r'<img[^>]+src="(https://cdn\.snkrdunk\.com/[^"]+)"', inner)
+                if img_m:
+                    image_url = img_m.group(1)
+
+                is_box = 0 if _is_individual_card(title) else 1
+
+                items.append({
+                    "rank": len(items) + 1,
+                    "apparel_id": apparel_id,
+                    "title": title,
+                    "price_jpy": price_jpy,
+                    "image_url": image_url,
+                    "is_box": is_box,
+                })
+                page_added += 1
+                if len(items) >= limit:
+                    break
+
+            print(f"[snkr_hot] page={page_no} +{page_added} (total={len(items)})")
+            if len(items) >= limit:
+                break
+            if page_added == 0:
+                # 該頁完全無新商品 → SNKR 沒下一頁了
+                break
 
     return items
 
@@ -895,30 +918,139 @@ async def _resolve_snkr_title_to_card(db, title: str) -> tuple[str | None, str |
     return row[0], card_number
 
 
+def _compute_image_url_local(thumb_url: str | None) -> str | None:
+    """把 jp_card_list.thumb_url 轉成可直接給瀏覽器用的本站卡圖 URL。
+
+    三種格式都支援：
+    - 相對路徑 `/assets/images/...` → 拼 pokemon-card.com 前綴
+    - artofpkm 完整 URL `https://www.artofpkm.com/...` → 直接用
+    - SNKR cdn URL `https://cdn.snkrdunk.com/...` → 直接用（M5 等新 set 補抓用 SNKR 圖）
+    """
+    if not thumb_url:
+        return None
+    if thumb_url.startswith("http://") or thumb_url.startswith("https://"):
+        return thumb_url
+    if thumb_url.startswith("/"):
+        return "https://www.pokemon-card.com" + thumb_url
+    return None
+
+
 async def _refresh_snkr_hot_items() -> dict:
-    """爬完寫進 snkr_hot_items 表、回傳統計。"""
+    """爬完寫進 snkr_hot_items 表、回傳統計。
+
+    對每個商品額外查 jp_card_list 拿 thumb_url 填 image_url_local：
+    set_id+card_number 對得到本站卡 → 用本站卡圖；對不到 → NULL、前端 fallback SNKR cdn。
+    """
     import aiosqlite
     import uuid
-    items = await _scrape_snkr_hot_items(limit=30)
+    items = await _scrape_snkr_hot_items()
     if not items:
         return {"saved": 0, "error": "scrape returned 0 items"}
 
     batch_id = uuid.uuid4().hex[:12]
     mapped_count = 0
+    local_img_count = 0
     async with aiosqlite.connect(DB_PATH) as db:
         for it in items:
             set_id, card_number = await _resolve_snkr_title_to_card(db, it["title"])
-            if set_id:
+            image_url_local: str | None = None
+            if set_id and card_number:
                 mapped_count += 1
+                row = await (await db.execute(
+                    "SELECT thumb_url FROM jp_card_list "
+                    "WHERE pg=? AND CAST(card_number AS INTEGER)=CAST(? AS INTEGER) "
+                    "AND thumb_url IS NOT NULL LIMIT 1",
+                    (set_id, card_number),
+                )).fetchone()
+                if row:
+                    image_url_local = _compute_image_url_local(row[0])
+                    if image_url_local:
+                        local_img_count += 1
             await db.execute(
                 """INSERT INTO snkr_hot_items
-                   (batch_id, rank, apparel_id, title, price_jpy, image_url, is_box, set_id, card_number)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (batch_id, rank, apparel_id, title, price_jpy, image_url, is_box,
+                    set_id, card_number, image_url_local)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (batch_id, it["rank"], it["apparel_id"], it["title"],
-                 it["price_jpy"], it["image_url"], it["is_box"], set_id, card_number),
+                 it["price_jpy"], it["image_url"], it["is_box"],
+                 set_id, card_number, image_url_local),
             )
         await db.commit()
-    return {"saved": len(items), "batch_id": batch_id, "mapped_to_db": mapped_count}
+    return {
+        "saved": len(items),
+        "batch_id": batch_id,
+        "mapped_to_db": mapped_count,
+        "with_local_img": local_img_count,
+    }
+
+
+# SNKR 熱賣商品的盒裝後綴翻譯
+_SNKR_PRODUCT_SUFFIX_ZH = [
+    ("ボックス", "盒裝"),
+    ("パック", "包"),
+    ("デッキ", "牌組"),
+    ("カートン", "整箱"),
+    ("BOX", "BOX"),
+]
+
+
+async def _build_snkr_title_zh(item: dict, db) -> str | None:
+    """組合 SNKR 熱賣商品的中文標題。組不出來回 None、前端 fallback 純日文。
+
+    單卡 (is_box=0、有 set_id+card_number)：用 jp_card_list.name_jp 翻、保留稀有度 + [編號]
+    盒裝 (is_box=1)：抽 「」內 set 名查 jp_card_list_set 拿中文、加產品後綴
+    """
+    import re
+
+    title = item.get("title") or ""
+    is_box = item.get("is_box") or 0
+    set_id = item.get("set_id")
+    card_number = item.get("card_number")
+
+    if not is_box and set_id and card_number:
+        # 單卡：拿日文名翻譯
+        row = await (await db.execute(
+            "SELECT name_jp FROM jp_card_list WHERE pg=? AND CAST(card_number AS INTEGER)=CAST(? AS INTEGER) LIMIT 1",
+            (set_id, card_number),
+        )).fetchone()
+        if not row or not row["name_jp"]:
+            return None
+        name_zh = await _translate_jp_card_name_to_zh(row["name_jp"], db)
+        if not name_zh:
+            return None
+        # 從原 title 抽稀有度 + [編號]: "メガダークライex SAR [M5 114/081](...)" → " SAR [M5 114/081]"
+        m = re.search(r'\s+(\S+)\s*(\[[^\]]+\])', title)
+        rarity_and_num = ""
+        if m:
+            rarity_and_num = f" {m.group(1)} {m.group(2)}"
+        return name_zh + rarity_and_num
+
+    if is_box:
+        # 盒裝：抽 「」內最後一個 token 當 set 名
+        matches = re.findall(r'「([^」]+)」', title)
+        if not matches:
+            return None
+        set_name_jp = matches[-1]
+        srow = await (await db.execute(
+            "SELECT name_jp FROM jp_card_list_set WHERE name_jp LIKE ? LIMIT 1",
+            (f"%{set_name_jp}%",),
+        )).fetchone()
+        if not srow:
+            return None
+        # name_jp 格式: "日文 (中文)"、抽中文段
+        m2 = re.search(r'\(([^)]+)\)$', srow["name_jp"])
+        if not m2:
+            return None
+        set_zh = m2.group(1).strip()
+        # 抽 title 結尾的產品後綴
+        suffix_zh = ""
+        for jp_kw, zh_kw in _SNKR_PRODUCT_SUFFIX_ZH:
+            if title.rstrip().endswith(jp_kw):
+                suffix_zh = zh_kw
+                break
+        return set_zh + suffix_zh
+
+    return None
 
 
 @app.get("/api/snkr/hot")
@@ -927,6 +1059,12 @@ async def get_snkr_hot(limit: int = 10):
 
     自動 24h cache:最新 batch 超過 24 小時或表空就自動重爬,user 訪問首頁
     時不需手動觸發。
+
+    每個 item 附 `title_zh`：抽 set 名 / 卡名翻譯後的中文標題、組不出來給 None。
+    每個 item 附 `image_url_local`：本站 jp_card_list 對到的卡圖、組不出來給 None；
+    前端應該以 image_url_local || image_url fallback。
+
+    limit=0 代表回傳整批所有商品（最近一次爬整 SNKR popular 頁所有頁）。
     """
     import aiosqlite
     async with aiosqlite.connect(DB_PATH) as db:
@@ -963,15 +1101,27 @@ async def get_snkr_hot(limit: int = 10):
         if not latest_batch:
             return {"items": [], "fetched_at": None, "source": "snkr_hottest"}
 
+        # limit=0 → 拉整批所有商品（用一個極大值代替 LIMIT、SQLite 不支援 LIMIT -1 含 ORDER BY 的所有版本）
+        effective_limit = limit if limit and limit > 0 else 100000
         rows = await (await db.execute(
-            """SELECT rank, apparel_id, title, price_jpy, image_url, is_box,
-                      set_id, card_number, fetched_at
+            """SELECT rank, apparel_id, title, price_jpy, image_url, image_url_local,
+                      is_box, set_id, card_number, fetched_at
                FROM snkr_hot_items WHERE batch_id=? ORDER BY rank ASC LIMIT ?""",
-            (latest_batch["batch_id"], limit),
+            (latest_batch["batch_id"], effective_limit),
         )).fetchall()
 
+        items_out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["title_zh"] = await _build_snkr_title_zh(d, db)
+            except Exception as e:
+                d["title_zh"] = None
+                print(f"[snkr_hot] zh build err apparel={d.get('apparel_id')}: {e}")
+            items_out.append(d)
+
     return {
-        "items": [dict(r) for r in rows],
+        "items": items_out,
         "fetched_at": latest_batch["fetched_at"],
         "source": "snkr_hottest",
         "disclaimer": "資料整理自 SNKR 公開 API",
@@ -983,6 +1133,189 @@ async def refresh_snkr_hot_admin():
     """手動觸發爬一次 SNKR 熱門寫進 DB(管理員用)。"""
     result = await _refresh_snkr_hot_items()
     return result
+
+
+# ==================== 到價通知 price_alerts + notifications (2026-05-25) ====================
+
+from fastapi import Body, Depends  # ensure imports available at this position (full import at line ~2977)
+
+import os as _os
+LINE_CHANNEL_ACCESS_TOKEN = _os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+
+
+async def _push_line_notify(line_user_id, title: str, body: str) -> bool:
+    """LINE Push API. 沒 token 或 user 沒 bind line_user_id → 跳過 return False."""
+    if not line_user_id or not LINE_CHANNEL_ACCESS_TOKEN:
+        return False
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                "https://api.line.me/v2/bot/message/push",
+                headers={
+                    "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "to": line_user_id,
+                    "messages": [{"type": "text", "text": f"{title}\n\n{body}"}],
+                },
+            )
+            return r.status_code == 200
+    except Exception as e:
+        print(f"[line_push] err: {e}")
+        return False
+
+
+async def _check_box_alerts_triggered(apparel_id: int, current_price_jpy):
+    """sync_box_prices 後呼叫：檢查該盒 active alerts、達 trigger 條件 → 更新 status + 寫 notification + try LINE push."""
+    if current_price_jpy is None:
+        return
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT a.id, a.user_id, a.direction, a.target_price_jpy,
+                      b.title AS box_title, u.line_user_id, u.display_name
+               FROM price_alerts a
+               JOIN snkr_box_items b ON b.apparel_id = a.apparel_id
+               LEFT JOIN users u ON u.id = a.user_id
+               WHERE a.apparel_id=? AND a.status='active'""",
+            (apparel_id,),
+        )
+        alerts = [dict(r) for r in await cur.fetchall()]
+        for alert in alerts:
+            target = alert["target_price_jpy"]
+            direction = alert["direction"]
+            triggered = (direction == "below" and current_price_jpy <= target) or                         (direction == "above" and current_price_jpy >= target)
+            if not triggered:
+                continue
+            await db.execute(
+                "UPDATE price_alerts SET status='triggered', triggered_price_jpy=?, triggered_at=CURRENT_TIMESTAMP WHERE id=?",
+                (current_price_jpy, alert["id"]),
+            )
+            dir_zh = "跌到" if direction == "below" else "漲到"
+            title = "🔔 到價通知觸發"
+            box_title_short = (alert["box_title"] or "")[:30]
+            body = f"\"{box_title_short}\" {dir_zh} ¥{target:,}、目前 ¥{current_price_jpy:,}"
+            link_url = f"#/box?apparel_id={apparel_id}"
+            cur2 = await db.execute(
+                """INSERT INTO notifications (user_id, kind, title, body, link_url, channel, line_pushed)
+                   VALUES (?, 'price_alert', ?, ?, ?, 'inapp', 0)""",
+                (alert["user_id"], title, body, link_url),
+            )
+            notif_id = cur2.lastrowid
+            pushed = await _push_line_notify(alert["line_user_id"], title, body)
+            if pushed:
+                await db.execute(
+                    "UPDATE notifications SET line_pushed=1, channel='line' WHERE id=?",
+                    (notif_id,),
+                )
+        await db.commit()
+
+
+@app.post("/api/alerts/box")
+async def create_box_alert(payload: dict = Body(...),
+                            user: dict = Depends(auth_mod.get_current_user)):
+    """設盒裝到價通知。payload: {apparel_id, direction: 'below'|'above', target_price_jpy}"""
+    apparel_id = payload.get("apparel_id")
+    direction = (payload.get("direction") or "").strip()
+    target = payload.get("target_price_jpy")
+    if not apparel_id or direction not in ("below", "above") or not target or target <= 0:
+        raise HTTPException(status_code=400, detail="缺欄位或格式錯誤 (apparel_id / direction / target_price_jpy)")
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (await db.execute("SELECT 1 FROM snkr_box_items WHERE apparel_id=?", (int(apparel_id),))).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="盒裝不存在")
+        cur = await db.execute(
+            """INSERT INTO price_alerts (user_id, target_type, apparel_id, direction, target_price_jpy, status)
+               VALUES (?, 'box', ?, ?, ?, 'active')""",
+            (user["id"], int(apparel_id), direction, int(target)),
+        )
+        await db.commit()
+        return {"id": cur.lastrowid, "apparel_id": int(apparel_id), "direction": direction, "target_price_jpy": int(target), "status": "active"}
+
+
+@app.get("/api/alerts/me")
+async def my_alerts(status: str = "",
+                     user: dict = Depends(auth_mod.get_current_user)):
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        sql = """SELECT a.*, b.title AS box_title, b.image_url AS box_image
+                 FROM price_alerts a
+                 LEFT JOIN snkr_box_items b ON b.apparel_id = a.apparel_id
+                 WHERE a.user_id=?"""
+        params = [user["id"]]
+        if status:
+            sql += " AND a.status=?"
+            params.append(status)
+        sql += " ORDER BY a.created_at DESC"
+        cur = await db.execute(sql, params)
+        return {"alerts": [dict(r) for r in await cur.fetchall()]}
+
+
+@app.get("/api/alerts/me/box/{apparel_id}")
+async def my_alerts_for_box(apparel_id: int,
+                             user: dict = Depends(auth_mod.get_current_user)):
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT id, direction, target_price_jpy, status, created_at
+               FROM price_alerts WHERE user_id=? AND apparel_id=? AND status='active'
+               ORDER BY created_at DESC""",
+            (user["id"], apparel_id),
+        )
+        return {"alerts": [dict(r) for r in await cur.fetchall()]}
+
+
+@app.delete("/api/alerts/{alert_id}")
+async def delete_alert(alert_id: int,
+                        user: dict = Depends(auth_mod.get_current_user)):
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (await db.execute("SELECT user_id FROM price_alerts WHERE id=?", (alert_id,))).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="找不到通知")
+        if row[0] != user["id"]:
+            raise HTTPException(status_code=403, detail="不是你的通知")
+        await db.execute("UPDATE price_alerts SET status='cancelled' WHERE id=?", (alert_id,))
+        await db.commit()
+    return {"ok": True, "id": alert_id}
+
+
+@app.get("/api/notifications/me")
+async def my_notifications(unread_only: bool = False,
+                            user: dict = Depends(auth_mod.get_current_user)):
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM notifications WHERE user_id=?"
+        params = [user["id"]]
+        if unread_only:
+            sql += " AND read_at IS NULL"
+        sql += " ORDER BY created_at DESC LIMIT 50"
+        cur = await db.execute(sql, params)
+        items = [dict(r) for r in await cur.fetchall()]
+        unread = sum(1 for n in items if n.get("read_at") is None)
+        return {"items": items, "unread_count": unread}
+
+
+@app.patch("/api/notifications/{notif_id}/read")
+async def mark_notification_read(notif_id: int,
+                                  user: dict = Depends(auth_mod.get_current_user)):
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (await db.execute("SELECT user_id FROM notifications WHERE id=?", (notif_id,))).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="找不到通知")
+        if row[0] != user["id"]:
+            raise HTTPException(status_code=403, detail="不是你的通知")
+        await db.execute("UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE id=?", (notif_id,))
+        await db.commit()
+    return {"ok": True}
 
 
 # ==================== SNKR 盒裝商品 box endpoints (2026-05-25) ====================
@@ -1105,6 +1438,12 @@ async def sync_box_prices(apparel_id: int):
             (min_price, apparel_id),
         )
         await db.commit()
+
+    # 觸發到價通知檢查 (2026-05-25)
+    try:
+        await _check_box_alerts_triggered(apparel_id, min_price)
+    except Exception as e:
+        print(f'[box alerts] check err: {e}')
 
     return {
         "apparel_id": apparel_id,
@@ -1434,9 +1773,25 @@ async def get_set_latest_prices(set_id: str):
     return {"prices": {r[0]: r[1] for r in rows}}
 
 
+def _is_single_card_url(url: str | None) -> bool:
+    """判斷 logo_url 是否是「單卡圖」而非 set 封面。
+    單卡圖：URL 含 /card-img/twNNNNN.png 或 /card_images/large/...
+    Set 封面：URL 含 /card-img/products/... (官網繁中 set 封面正常路徑) — 視為合法
+    這些單卡圖是被誤填到 logo_url 欄的、不該當 set 封面。"""
+    if not url:
+        return False
+    # 官網 set 封面：含 /products/ 路徑 — 視為合法 set logo
+    if '/card-img/products/' in url:
+        return False
+    # 單卡圖：純 card-img 路徑（沒 products 子目錄）
+    bad_markers = ('/card-img/', '/card_images/large/', '/card_images/small/')
+    return any(m in url for m in bad_markers)
+
+
 @app.get("/api/cardlist/sets/{set_id}/preview-image")
 async def get_set_preview_image(set_id: str):
-    """取得 set 預覽圖。優先 artofpkm logo（DB 快取＋即時抓取），fallback pokellector logo。"""
+    """取得 set 預覽圖。優先 artofpkm logo（DB 快取＋即時抓取），fallback pokellector logo。
+    過濾單卡圖 URL（誤填到 logo_url 欄、不算 set 封面）。"""
     import sqlite3
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -1452,7 +1807,7 @@ async def get_set_preview_image(set_id: str):
             row2 = conn.execute(
                 "SELECT logo_url FROM artofpkm_sets WHERE id = ?", (art_id,)
             ).fetchone()
-            if row2 and row2["logo_url"]:
+            if row2 and row2["logo_url"] and not _is_single_card_url(row2["logo_url"]):
                 return {"set_id": set_id, "image_url": row2["logo_url"], "source": "artofpkm"}
 
         # 3) fallback：依序看 jp/tw/en 新表、再看舊 card_sets
@@ -1462,7 +1817,7 @@ async def get_set_preview_image(set_id: str):
             jp_row = conn.execute(
                 "SELECT logo_url FROM jp_card_list_set WHERE pg = ?", (set_id,)
             ).fetchone()
-            if jp_row and jp_row["logo_url"]:
+            if jp_row and jp_row["logo_url"] and not _is_single_card_url(jp_row["logo_url"]):
                 fallback_logo = jp_row["logo_url"]
                 # JP thumb 是 /assets/... 相對路徑、要前置官方 domain
                 if fallback_logo.startswith("/"):
@@ -1472,21 +1827,22 @@ async def get_set_preview_image(set_id: str):
             tw_row = conn.execute(
                 "SELECT logo_url FROM tw_card_list_set WHERE expansion_code = ?", (set_id,)
             ).fetchone()
-            if tw_row and tw_row["logo_url"]:
+            if tw_row and tw_row["logo_url"] and not _is_single_card_url(tw_row["logo_url"]):
                 fallback_logo = tw_row["logo_url"]
         # 3c) EN
         if not fallback_logo:
             en_row = conn.execute(
                 "SELECT logo_url FROM en_card_list_set WHERE set_id = ?", (set_id,)
             ).fetchone()
-            if en_row and en_row["logo_url"]:
+            if en_row and en_row["logo_url"] and not _is_single_card_url(en_row["logo_url"]):
                 fallback_logo = en_row["logo_url"]
         # 3d) 舊 card_sets
         if not fallback_logo:
             old_row = conn.execute(
                 "SELECT logo_url FROM card_sets WHERE set_id = ?", (set_id,)
             ).fetchone()
-            fallback_logo = old_row["logo_url"] if old_row else None
+            if old_row and old_row["logo_url"] and not _is_single_card_url(old_row["logo_url"]):
+                fallback_logo = old_row["logo_url"]
     finally:
         conn.close()
 
@@ -3151,6 +3507,12 @@ async def api_orderbook(set_id: str, card_number: str, grade: int = 10):
     return await mp.get_orderbook(set_id, card_number, grade)
 
 
+@app.get("/api/orderbook/{set_id}/{card_number}/depth")
+async def api_orderbook_depth(set_id: str, card_number: str, grade: int = 10, limit: int = 20):
+    """訂單簿深度：回完整 ASK list + BID list (各 limit 筆)、給盒裝詳情頁顯多筆掛單用"""
+    return await mp.get_orderbook_depth(set_id, card_number, grade, limit)
+
+
 @app.post("/api/listings")
 async def api_create_listing(payload: dict = Body(...),
                              user: dict = Depends(auth_mod.get_current_user)):
@@ -3632,13 +3994,7 @@ async def category_character_list():
         rows = await (await db.execute(
             """
             SELECT cd.id, cd.name_en, cd.name_jp, cd.name_zh,
-                   COALESCE(
-                     cd.image_url,
-                     (SELECT cl.image_url FROM card_list cl
-                      WHERE (cl.name LIKE cd.name_en || '%' OR cl.name LIKE '%' || cd.name_en || ' %')
-                        AND cl.image_url IS NOT NULL
-                      LIMIT 1)
-                   ) AS image_url,
+                   cd.image_url,
                    (cd.image_url IS NOT NULL) AS has_artofpkm
             FROM character_dict cd
             ORDER BY (cd.image_url IS NULL), COALESCE(cd.name_zh, cd.name_en)
@@ -3706,48 +4062,144 @@ async def category_pokemon_cards(pkm_id: int, language: str | None = None):
         name_jp = pkm["name_jp"]
         name_zh = pkm["name_zh"]
 
-        # 語言過濾：jp = jp-* 老卡 + 純數字 set_id (jp_card_list 新卡)；en = en-* 卡
-        lang_filter = ""
-        if language == "jp":
-            lang_filter = " AND (cl.set_id LIKE 'jp-%' OR cl.set_id GLOB '[0-9]*')"
-        elif language == "en":
-            lang_filter = " AND cl.set_id LIKE 'en-%'"
+        want_jp = (language is None or language == "jp")
+        want_en = (language is None or language == "en")
 
-        # 詞邊界比對：純名（exact）+ 前後接空白 + 中日文模糊
-        # 不加 exact match 會漏掉純名「Bulbasaur」這類 (現在 cl.name 大多是純名沒後綴)
-        sql = f"""
+        jp_rows: list[dict] = []
+        en_rows: list[dict] = []
+        cl_rows: list[dict] = []
+
+        # 翻譯 cache（一次 endpoint 內、同 name_jp 只查一次）
+        translate_cache: dict[str, str | None] = {}
+
+        async def _translate_cached(s: str | None):
+            if not s:
+                return None
+            if s in translate_cache:
+                return translate_cache[s]
+            zh = await _translate_jp_card_name_to_zh(s, db)
+            translate_cache[s] = zh
+            return zh
+
+        # ===== 1. jp_card_list（日文官方主表） =====
+        if want_jp and name_jp:
+            jp_sql = """
+                SELECT jcl.pg AS set_id, jcl.set_code AS _set_code,
+                       jcls.name_jp AS _set_full, jcls.release_date,
+                       jcl.card_number, jcl.name_jp,
+                       ('https://www.pokemon-card.com' || jcl.thumb_url) AS image_url, jcl.rarity
+                FROM jp_card_list jcl
+                LEFT JOIN jp_card_list_set jcls ON jcls.pg = jcl.pg
+                WHERE jcl.name_jp LIKE ? AND jcl.thumb_url IS NOT NULL
+            """
+            rows = await (await db.execute(jp_sql, (f"%{name_jp}%",))).fetchall()
+            for r in rows:
+                d = dict(r)
+                full = d.pop("_set_full", None) or ""
+                if " (" in full and full.endswith(")"):
+                    idx = full.rfind(" (")
+                    d["set_name"] = full[idx + 2:-1]
+                    d["set_name_jp"] = full[:idx]
+                else:
+                    d["set_name"] = full
+                    d["set_name_jp"] = full
+                d["name"] = None
+                d["name_zh"] = await _translate_cached(d.get("name_jp"))
+                jp_rows.append(d)
+
+        # ===== 2. en_card_list（英文官方主表） =====
+        if want_en:
+            en_sql = """
+                SELECT set_id, set_id AS _set_code, set_name,
+                       set_release_date AS release_date,
+                       number AS card_number, name,
+                       COALESCE(image_large_url, image_small_url) AS image_url,
+                       rarity
+                FROM en_card_list
+                WHERE (name = ? OR name LIKE ? OR name LIKE ? OR name LIKE ?)
+                  AND COALESCE(image_large_url, image_small_url) IS NOT NULL
+            """
+            rows = await (await db.execute(
+                en_sql,
+                (name_en, f"{name_en} %", f"% {name_en} %", f"% {name_en}"),
+            )).fetchall()
+            for r in rows:
+                d = dict(r)
+                d["name_jp"] = None
+                d["name_zh"] = None
+                d["set_name_jp"] = None
+                en_rows.append(d)
+
+        # ===== 3. card_list（舊整合表、補老 set） =====
+        cl_lang_filter = ""
+        if language == "jp":
+            cl_lang_filter = " AND (cl.set_id LIKE 'jp-%' OR cl.set_id GLOB '[0-9]*')"
+        elif language == "en":
+            cl_lang_filter = " AND cl.set_id LIKE 'en-%'"
+
+        cl_sql = f"""
             SELECT cl.set_id, cs.name AS set_name, cs.name_jp AS set_name_jp,
-                   cl.card_number, cl.name, cl.name_jp, cl.name_zh, cl.image_url, cl.rarity
+                   cs.release_date, cs.set_code AS _set_code,
+                   cl.card_number, cl.name, cl.name_jp, cl.name_zh,
+                   cl.image_url, cl.rarity
             FROM card_list cl
             LEFT JOIN card_sets cs ON cs.set_id = cl.set_id
             WHERE (cl.name = ?
                    OR cl.name LIKE ? OR cl.name LIKE ? OR cl.name LIKE ?
                    OR cl.name_jp LIKE ?)
               AND cl.image_url IS NOT NULL
-              {lang_filter}
-            ORDER BY cs.release_date DESC, cl.set_id, CAST(cl.card_number AS INTEGER)
-            LIMIT 1000
+              {cl_lang_filter}
         """
-        en = name_en
-        params = (
-            en,                                    # 純名（最重要）
-            f"{en} %", f"% {en} %", f"% {en}",     # 詞邊界
-            f"%{name_jp}%" if name_jp else "____", # 日文 fallback
+        cl_params = (
+            name_en, f"{name_en} %", f"% {name_en} %", f"% {name_en}",
+            f"%{name_jp}%" if name_jp else "____",
         )
-        rows = await (await db.execute(sql, params)).fetchall()
-        out_rows = [dict(r) for r in rows]
-        for r in out_rows:
-            sid = r.get("set_id") or ""
+        rows = await (await db.execute(cl_sql, cl_params)).fetchall()
+        for r in rows:
+            d = dict(r)
+            sid = d.get("set_id") or ""
             is_jp_set = sid.startswith("jp-") or (sid and sid[0].isdigit())
-            # jp 卡若 name_jp NULL → 用該寶可夢 pokemon_dict.name_jp 填補
-            # （避免 cardItemHtml 顯示「Bulbasaur (妙蛙種子)」這種日英混淆的主名）
-            if is_jp_set and not r.get("name_jp") and name_jp:
-                r["name_jp"] = name_jp
-            # 翻譯：jp 卡套用 _translate_jp_card_name_to_zh
-            if is_jp_set and r.get("name_jp"):
-                zh = await _translate_jp_card_name_to_zh(r.get("name_jp"), db)
+            if is_jp_set and not d.get("name_jp") and name_jp:
+                d["name_jp"] = name_jp
+            if is_jp_set and d.get("name_jp"):
+                zh = await _translate_cached(d.get("name_jp"))
                 if zh:
-                    r["name_zh"] = zh
+                    d["name_zh"] = zh
+            cl_rows.append(d)
+
+        # ===== Dedupe：(set_code, card_number) 為跨表 key =====
+        # jp_card_list / en_card_list 優先進 seen、card_list 撞到就 skip
+        # set_code 為 NULL 的 row（card_sets / jp_card_list / en_card_list 沒填）保留、不 dedupe
+        seen: set = set()
+        out_rows: list[dict] = []
+
+        for r in (jp_rows + en_rows):
+            sc = r.pop("_set_code", None)
+            if not sc:
+                out_rows.append(r)
+                continue
+            key = (sc.upper(), str(r.get("card_number") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out_rows.append(r)
+
+        for r in cl_rows:
+            sc = r.pop("_set_code", None)
+            if not sc:
+                out_rows.append(r)
+                continue
+            key = (sc.upper(), str(r.get("card_number") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out_rows.append(r)
+
+        # 按 release_date DESC 排
+        out_rows.sort(key=lambda r: (r.get("release_date") or "", str(r.get("set_id") or ""),
+                                      _safe_int_card_number(r.get("card_number"))),
+                      reverse=False)
+        out_rows.sort(key=lambda r: r.get("release_date") or "0000-00-00", reverse=True)
 
         return {
             "pokemon": {"id": pkm_id, "name_en": name_en, "name_jp": name_jp, "name_zh": name_zh},
@@ -3759,7 +4211,14 @@ async def category_pokemon_cards(pkm_id: int, language: str | None = None):
 @app.get("/api/category/character/{char_id}/cards")
 async def category_character_cards(char_id: int, language: str | None = None):
     """某訓練家/角色出現過的卡。
-    language='jp' / 'en' 過濾語言版本；None=全語言"""
+    language='jp' / 'en' 過濾語言版本；None=全語言
+
+    來源三表 UNION + dedupe：
+    - jp_card_list（日本官方主表、最新最完整）
+    - en_card_list（英文官方 pokemontcg.io）
+    - card_list（舊整合表、補前兩表沒覆蓋的老 set）
+    優先序：jp_card_list / en_card_list > card_list（同 (name_jp/name, card_number) key 後者讓步）
+    """
     import aiosqlite
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -3773,78 +4232,215 @@ async def category_character_cards(char_id: int, language: str | None = None):
         name_en = ch["name_en"]
         name_jp = ch["name_jp"]
 
-        lang_filter = ""
-        if language == "jp":
-            lang_filter = " AND (cl.set_id LIKE 'jp-%' OR cl.set_id GLOB '[0-9]*')"
-        elif language == "en":
-            lang_filter = " AND cl.set_id LIKE 'en-%'"
-
         # 短英文名（N / MC / AZ 這類純 ASCII 字母）走嚴格模式、避免 LIKE '%N%' 撞到 V-UNION / LEGEND 等羅馬字卡名
         is_short_ascii = bool(re.fullmatch(r"[A-Za-z]+", name_en or "")) or bool(re.fullmatch(r"[A-Za-z]+", name_jp or ""))
 
+        want_jp = (language is None or language == "jp")
+        want_en = (language is None or language == "en")
+
+        jp_rows: list[dict] = []
+        en_rows: list[dict] = []
+        cl_rows: list[dict] = []
+
+        # ===== 1. jp_card_list（日文主表） =====
+        if want_jp and name_jp:
+            if is_short_ascii:
+                jp_where = "(jcl.name_jp = ? OR jcl.name_jp LIKE ?)"
+                jp_params: tuple = (name_jp, f"{name_jp}の%")
+            else:
+                jp_where = "jcl.name_jp LIKE ?"
+                jp_params = (f"%{name_jp}%",)
+            jp_sql = f"""
+                SELECT jcl.pg AS set_id, jcl.set_code AS _set_code,
+                       jcls.name_jp AS _set_full,
+                       jcls.release_date,
+                       jcl.card_number, jcl.name_jp,
+                       ('https://www.pokemon-card.com' || jcl.thumb_url) AS image_url,
+                       jcl.rarity
+                FROM jp_card_list jcl
+                LEFT JOIN jp_card_list_set jcls ON jcls.pg = jcl.pg
+                WHERE {jp_where} AND jcl.thumb_url IS NOT NULL
+            """
+            rows = await (await db.execute(jp_sql, jp_params)).fetchall()
+            for r in rows:
+                d = dict(r)
+                # jp_card_list_set.name_jp 格式「日 (中)」、拆出來
+                full = d.pop("_set_full", None) or ""
+                if " (" in full and full.endswith(")"):
+                    idx = full.rfind(" (")
+                    d["set_name"] = full[idx + 2:-1]
+                    d["set_name_jp"] = full[:idx]
+                else:
+                    d["set_name"] = full
+                    d["set_name_jp"] = full
+                d["name"] = None
+                d["name_zh"] = None
+                if d.get("name_jp"):
+                    zh = await _translate_jp_card_name_to_zh(d.get("name_jp"), db)
+                    if zh:
+                        d["name_zh"] = zh
+                d["_source"] = "jp_card_list"
+                jp_rows.append(d)
+
+        # ===== 2. en_card_list（英文主表） =====
+        if want_en:
+            if is_short_ascii:
+                en_where = "(name = ? OR name LIKE ? OR name LIKE ? OR name LIKE ? OR name LIKE ?)"
+                en_params: tuple = (
+                    name_en, f"{name_en} %", f"% {name_en} %", f"% {name_en}",
+                    f"{name_en}'s %",
+                )
+                en_exclude = " AND name NOT LIKE '%Unown%'"
+            else:
+                en_where = "(name = ? OR name LIKE ? OR name LIKE ? OR name LIKE ?)"
+                en_params = (name_en, f"{name_en} %", f"% {name_en} %", f"% {name_en}")
+                en_exclude = ""
+
+            en_sql = f"""
+                SELECT set_id, set_id AS _set_code, set_name,
+                       set_release_date AS release_date,
+                       number AS card_number, name,
+                       COALESCE(image_large_url, image_small_url) AS image_url,
+                       rarity
+                FROM en_card_list
+                WHERE {en_where}{en_exclude}
+                  AND COALESCE(image_large_url, image_small_url) IS NOT NULL
+            """
+            rows = await (await db.execute(en_sql, en_params)).fetchall()
+            for r in rows:
+                d = dict(r)
+                d["name_jp"] = None
+                d["name_zh"] = None
+                d["set_name_jp"] = None
+                d["_source"] = "en_card_list"
+                en_rows.append(d)
+
+        # ===== 3. card_list（舊整合表、補老 set 用） =====
+        cl_lang_filter = ""
+        if language == "jp":
+            cl_lang_filter = " AND (cl.set_id LIKE 'jp-%' OR cl.set_id GLOB '[0-9]*')"
+        elif language == "en":
+            cl_lang_filter = " AND cl.set_id LIKE 'en-%'"
+
+        cl_exclude = " AND cl.name NOT LIKE '%Unown%'" if is_short_ascii else ""
+
         if is_short_ascii:
             jp_clauses = []
-            jp_params: list[str] = []
+            jp_clause_params: list[str] = []
             if name_jp:
                 jp_clauses.append("cl.name_jp = ?")
-                jp_params.append(name_jp)
+                jp_clause_params.append(name_jp)
                 jp_clauses.append("cl.name_jp LIKE ?")
-                jp_params.append(f"{name_jp}の%")
+                jp_clause_params.append(f"{name_jp}の%")
                 jp_clauses.append("cl.name_jp LIKE ?")
-                jp_params.append(f"{name_jp}'s %")
-            jp_sql = " OR ".join(jp_clauses) if jp_clauses else "0"
-            sql = f"""
+                jp_clause_params.append(f"{name_jp}'s %")
+            jp_sql_clause = " OR ".join(jp_clauses) if jp_clauses else "0"
+            cl_sql = f"""
                 SELECT cl.set_id, cs.name AS set_name, cs.name_jp AS set_name_jp,
-                       cl.card_number, cl.name, cl.name_jp, cl.name_zh, cl.image_url, cl.rarity
+                       cs.release_date, cs.set_code AS _set_code,
+                       cl.card_number, cl.name, cl.name_jp, cl.name_zh,
+                       cl.image_url, cl.rarity
                 FROM card_list cl
                 LEFT JOIN card_sets cs ON cs.set_id = cl.set_id
                 WHERE (cl.name = ?
                        OR cl.name LIKE ? OR cl.name LIKE ? OR cl.name LIKE ?
                        OR cl.name LIKE ?
-                       OR {jp_sql})
+                       OR {jp_sql_clause})
                   AND cl.image_url IS NOT NULL
-                  {lang_filter}
-                ORDER BY cs.release_date DESC, cl.set_id, CAST(cl.card_number AS INTEGER)
-                LIMIT 1000
+                  {cl_exclude}
+                  {cl_lang_filter}
             """
-            params = (
-                name_en,
-                f"{name_en} %", f"% {name_en} %", f"% {name_en}",
+            cl_params: tuple = (
+                name_en, f"{name_en} %", f"% {name_en} %", f"% {name_en}",
                 f"{name_en}'s %",
-                *jp_params,
+                *jp_clause_params,
             )
         else:
-            sql = f"""
+            cl_sql = f"""
                 SELECT cl.set_id, cs.name AS set_name, cs.name_jp AS set_name_jp,
-                       cl.card_number, cl.name, cl.name_jp, cl.name_zh, cl.image_url, cl.rarity
+                       cs.release_date, cs.set_code AS _set_code,
+                       cl.card_number, cl.name, cl.name_jp, cl.name_zh,
+                       cl.image_url, cl.rarity
                 FROM card_list cl
                 LEFT JOIN card_sets cs ON cs.set_id = cl.set_id
                 WHERE (cl.name = ?
                        OR cl.name LIKE ? OR cl.name LIKE ? OR cl.name LIKE ?
                        OR cl.name_jp LIKE ?)
                   AND cl.image_url IS NOT NULL
-                  {lang_filter}
-                ORDER BY cs.release_date DESC, cl.set_id, CAST(cl.card_number AS INTEGER)
-                LIMIT 1000
+                  {cl_lang_filter}
             """
-            params = (
-                name_en,
-                f"{name_en} %", f"% {name_en} %", f"% {name_en}",
+            cl_params = (
+                name_en, f"{name_en} %", f"% {name_en} %", f"% {name_en}",
                 f"%{name_jp}%" if name_jp else "____",
             )
-        rows = await (await db.execute(sql, params)).fetchall()
-        out_rows = [dict(r) for r in rows]
-        for r in out_rows:
-            sid = r.get("set_id") or ""
-            if sid.startswith("jp-") and r.get("name_jp"):
-                zh = await _translate_jp_card_name_to_zh(r.get("name_jp"), db)
+        rows = await (await db.execute(cl_sql, cl_params)).fetchall()
+        for r in rows:
+            d = dict(r)
+            sid = d.get("set_id") or ""
+            if (sid.startswith("jp-") or (sid and sid[0].isdigit())) and d.get("name_jp"):
+                zh = await _translate_jp_card_name_to_zh(d.get("name_jp"), db)
                 if zh:
-                    r["name_zh"] = zh
+                    d["name_zh"] = zh
+            d["_source"] = "card_list"
+            cl_rows.append(d)
+
+        # ===== Dedupe：跨表用 (set_code, card_number) 為 key =====
+        # set_code 為 NULL 的 row（card_sets 沒填）保留、不 dedupe
+        seen: set = set()
+        out_rows: list[dict] = []
+
+        for r in (jp_rows + en_rows):
+            sc = r.pop("_set_code", None)
+            if not sc:
+                out_rows.append(r)
+                continue
+            key = (sc.upper(), str(r.get("card_number") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out_rows.append(r)
+
+        for r in cl_rows:
+            sc = r.pop("_set_code", None)
+            if not sc:
+                out_rows.append(r)
+                continue
+            key = (sc.upper(), str(r.get("card_number") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out_rows.append(r)
+
+        # 按 release_date DESC 排（NULL release_date 排最後）
+        def _sort_key(r):
+            rd = r.get("release_date") or ""
+            try:
+                cn = int(r.get("card_number") or 9999)
+            except (ValueError, TypeError):
+                cn = 9999
+            return (rd == "", -ord(rd[0]) if rd else 0, rd, str(r.get("set_id") or ""), cn)
+        # 簡單：release_date 字串 DESC（YYYY-MM-DD 字串大小 = 時間順序）
+        out_rows.sort(key=lambda r: (r.get("release_date") or "", str(r.get("set_id") or ""),
+                                      _safe_int_card_number(r.get("card_number"))),
+                      reverse=False)
+        out_rows.sort(key=lambda r: r.get("release_date") or "0000-00-00", reverse=True)
+
+        # 移除 internal 欄位 _source / release_date（前端不需要）
+        for r in out_rows:
+            r.pop("_source", None)
+
         return {
             "character": {"id": char_id, "name_en": name_en, "name_jp": name_jp},
             "count": len(out_rows),
             "cards": out_rows,
         }
+
+
+def _safe_int_card_number(v):
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return 9999
 
 
 # ==================== Admin: eBay blocklist & revalidation ====================
