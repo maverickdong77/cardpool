@@ -137,14 +137,9 @@ class PSASession:
                 seen.append(sid)
         return seen
 
-    SPEC_LINK_TITLE_RE = re.compile(
-        r'<a[^>]*href="(?:/spec/psa/)(\d+)"[^>]*>([^<]+)</a>',
-        re.IGNORECASE | re.DOTALL,
-    )
-
     def search_spec_ids_with_titles(self, query: str) -> list[tuple[str, str]]:
-        """搜尋頁 → list of (spec_id, anchor_text)、最多前 30 個。
-        anchor_text 含 '#{card_number}' + 卡名 + 稀有度、可用於 post-filter。
+        """搜尋頁 → list of (spec_id, anchor_text)。
+        用 DOM query (innerText) 而非 regex 解 HTML、不受 anchor 子元素結構影響。
         """
         from urllib.parse import quote
         url = f"{PSA_BASE}/auctionprices/search?q={quote(query)}"
@@ -158,12 +153,18 @@ class PSASession:
                 self._page.wait_for_selector('a[href^="/spec/psa/"]', timeout=8000)
             except Exception:
                 pass
-            html = self._page.content()
+            results = self._page.evaluate("""
+                () => [...document.querySelectorAll('a[href^="/spec/psa/"]')]
+                      .map(a => {
+                          const m = a.getAttribute('href').match(/\\/spec\\/psa\\/(\\d+)/);
+                          return m ? [m[1], a.innerText.trim()] : null;
+                      })
+                      .filter(Boolean)
+            """)
         except Exception:
             return []
         seen: dict[str, str] = {}
-        for m in self.SPEC_LINK_TITLE_RE.finditer(html):
-            sid, title = m.group(1), m.group(2).strip()
+        for sid, title in results or []:
             if sid not in seen:
                 seen[sid] = title
         return list(seen.items())
