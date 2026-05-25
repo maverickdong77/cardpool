@@ -21,6 +21,7 @@ Python/
 .DS_Store
 Thumbs.db
 .claude/
+ONBOARDING.md
 
 # === 環境變數 ===
 .env
