@@ -109,6 +109,8 @@ $pid_=(netstat -ano | findstr ":8000 .*LISTENING").Split()[-1]; taskkill /F /PID
 
 - **cards.db 不適合並行兩個 backfill writer**：SQLite WAL mode 解 reader 並行、writer 仍序列化。任何長 tx + 短 tx 並存會餓死短 tx。實證 2026-05-20：card_type backfill 50 卡 commit 一次、寫鎖 hold ~100s、那段時間 eBay sync 全 `database is locked` → 500（aiosqlite default 5s timeout 救不到）。**規則：任何兩個寫 cards.db 的 backfill 不要同時跑**。要嘛序列（先 A 跑完再 B）、要嘛把長 tx 改 per-card commit（fsync 多 50x 但 lock 窗口從 100s 壓到 ms）。提案並行 cards.db 寫之前要明確說「但會撞 SQLite 寫鎖」。
 - **重複 cardID**：`jp_card_list` 有 785 組 `(pg, card_number)` 對映 ≥2 個 cardID。任何 UPDATE / SELECT 統一用 `(pg, card_number)` 而非 cardID。`card_prices` 鍵不含 cardID。
+- **跨表 dedupe key 一律用 `(set_code, card_number)`、不能用 `(name_jp/name, card_number)`**（2026-05-25 升級）：對 trainer 卡（reprint 少）name+number 還 work、但對寶可夢卡會誤殺 reprint（皮卡丘 #1 在 8 個不同卡盒都當 #1 印、用 name+number 全合併到 1 張、漏 7 張）。**修法**：(a) 先 backfill `card_sets.set_code` 對映三表（jp 系靠 `jp_card_list_set.name_jp` 拆解 + en 系靠 `en_card_list.set_name` 比對、覆蓋率 jp 31% / en 64%、熱門 set 全對到）、(b) endpoint dedupe 用 `(set_code.upper(), card_number)`、set_code NULL 的 row 保留不 dedupe。實證 `category_pokemon_cards` Pikachu 446 → 607 (+36%) / Charizard 205 → 272 / `category_character_cards` N 67 → 114。**通則**：未來任何 UNION 多表的 endpoint 都用 set_code 跨表對齊、不用 name+number。
+- **`jp_card_list.thumb_url` 是相對路徑、endpoint 回前端必拼 `'https://www.pokemon-card.com' || ` 前綴**（2026-05-25 升級）：thumb_url 存的是 `/assets/images/card_images/large/SV9/047023_P_NNODARUMAKKA.jpg` 這種相對路徑、瀏覽器接到當本機 server 找 → 404 → onerror 把 img display:none、user 看到「卡圖全空白」。**修法**：SQL `('https://www.pokemon-card.com' || jcl.thumb_url) AS image_url`。**通則**：新寫 endpoint 拿 jp_card_list 卡圖、grep `jcl.thumb_url` 看每個 occurrence 有沒拼前綴。
 - **Set 名拆解**：`jp_card_list_set.name_jp` 用 `日文 (中文)` 格式、scraper `_set_name_variants`（`app/scraper/snkrdunk_http.py:99`）會脫括號 + 按空格拆 token、且**尾部 token 優先**（複合 set 名子集名常在後、避免前綴撞舊 set）。
 - **JP→EN 卡名翻譯管線**（`app/main.py:_translate_jp_card_name_to_en`）：
   1. Strip HTML（Bulbapedia `<span class="pcg pcg-megamark"></span>` → is_mega=True）
@@ -139,6 +141,7 @@ $pid_=(netstat -ano | findstr ":8000 .*LISTENING").Split()[-1]; taskkill /F /PID
   - **post-filter `_title_has_card_name_token`**（`app/scraper/ebay.py:_significant_name_tokens`）：EN token **全部命中** OR JP token **任一命中**、避免 `Ball` 共用導致 Master Ball 誤命中 Ultra Ball
   - JP 卡 bypass `_title_has_set_token` 過濾（query 已無 set token）
 - **HTA 啟動模式**：`run_api.py` 設 `CARDPOOL_DISABLE_JOBS=1`、背景排程預設不跑、避免影響前端瀏覽。要手動啟動：`POST /api/admin/jobs/{name}/start`。
+- **HTA 開瀏覽器必加 cache buster `?v=<timestamp>` 繞 browser cache**：`..\卡波\卡波.hta` 內 `sh.Run('http://localhost:8080/index.html?v=' + new Date().getTime())`。沒這個 user 改 `..\卡波\index.html` 後 HTA 啟動仍 serve 舊 cache 看不到新版（5/25 凌晨撞到、像素風合進 production 後 user「都沒看到像素風」）。手動測試用 Ctrl+F5 強制 reload 也能繞、但 HTA cache buster 是預設保險。**未來修 `..\卡波\卡波.hta` 不要拿掉 `?v=` query string**。
 - **Windows cp950 編碼**：`./Python/bin/python.exe -c "..."` 印 JP/ZH 必加 `PYTHONIOENCODING=utf-8`、否則 UnicodeEncodeError。
 - **資料夾命名含全形字**：前端在「卡波/」、bash 操作需用 quote `"卡波/index.html"`、PowerShell 沒問題。
 
@@ -180,6 +183,8 @@ $pid_=(netstat -ano | findstr ":8000 .*LISTENING").Split()[-1]; taskkill /F /PID
 
   範例 / 選項 / AskUserQuestion 的 option label 跟 description 全部適用此規則 — 不只是回答 text。
 
+- **寫 AskUserQuestion option 前、每個字心裡念一遍 proofread**（2026-05-25 升級、user 強調「重點注意」）：本規則跟「白話 + 括號附原文」是兩件事 — 那個是「不丟術語」、這個是「字本身是否正確繁中通順」。寫 question / label / description 時、常犯：(a) 打錯字（如「裡」寫成「竹裡」、「裡」寫成「訂」）、(b) 詞不達意的半生不熟句（「跡 daily backfill 不合」）、(c) 不小心混簡體或日文整段。**做法**：每寫完一個欄位、停下來在腦中念一遍、不通就重寫；ToolUse JSON 送出前再掃一次。常用字（裡 / 中 / 內 / 順 / 訂 / 訊 / 設定）別憑語感拼、不確定改用更基本的字。User 跨多 session 親口指出 3+ 次、本規則違反 = 直接破壞 trust。詳細範例參考 memory feedback `askuser-proofread`。
+
 - **問 user 技術決策、不要只丟術語問「要不要做」**（2026-05-22 升級 + 同日修正）：問 user 問題前自我檢查 — 這條問題裡有沒有 user 看不懂的術語？user 看了能不能評估？如果問題本身是純技術細節（如「SQLite UNIQUE 約束 PRAGMA 不顯示」「cascade dedupe 順序」「IntegrityError」「composite PK」這類）、**先在問題前用白話解釋為什麼這對 user 重要**（如「未來我寫資料庫腳本會撞到、現在記下來避免重蹈」）、再問 yes/no。**若 user 答「看不懂」、不要因此自行決定 — 而是改用更白話的方式重新講一次、再問**。User 看不懂代表我問的方式有問題、不代表他不想決定。**所有決定都要跟 user 討論**（除了下一段「### 決策」寫的純技術細節例外：變數命名、import 順序、純語法選擇）。決定權永遠屬於 user、我的角色是「把技術問題翻譯成白話 + 列選項 + 給推薦」。
 
 - **講 JP set 不要只丟 pg 數字、要附中文名**（2026-05-22 升級）：user 看不懂 `9001` / `9002` / `949` / `950` 這些 internal 編號。提到任何 JP set、**每次都要帶中文名**、不只第一次提及。格式：「中文名 (pg=XXXX)」或「中文名 (pg=XXXX, set_code=YYY)」、不要單獨丟 pg。例：「『朱紫期 promo (MEGA 階段)』(pg=9003) 併入『朱紫期 promo』(pg=9001)」、不是「9003 → 9001」。對照表在 `docs/jp_sets_lookup.md`、Read 該檔可查 368 個 set 的 pg → 中文名 / 日文名 / set_code / 發售日。對照表用 `_gen_jp_sets_lookup.py` 重生（jp_card_list_set 改了重跑）。同樣道理 set_code 短代碼（SV-P / M2a / M2 等）對 user 也不直觀、雖比純數字好、但**仍要附中文名**。
@@ -198,6 +203,15 @@ $pid_=(netstat -ano | findstr ":8000 .*LISTENING").Split()[-1]; taskkill /F /PID
   2. **Bulbapedia 輔助**：對 httpx + headless playwright 雙擋 Cloudflare、要 user-data-dir persistent_context 繞。In other languages 表 regex 易誤抓 voice actor / 集名（如 Ash Ketchum 抓到「賀世芳」是配音員）、quality 要 spot check 多。Bulbapedia 留給 52poke 沒收的 set / unique 角色名比對用。
   3. **hardcode 官方常見譯名兜底**：知名主角 / 通用職位類（如 Ash Ketchum → 小智、Team Rocket Grunt → 火箭隊手下）52poke search miss 時直接 hardcode（屬於「外部 source 失效時的 finalize」、不違反禁手寫 seed 原則）。
   4. **避雷**：jp_term_dict 內 27 條 name_zh 填日文 katakana 當「翻譯」（v1 反查 garbage 風險）、UPDATE 過 SET NULL 但未來新建 dict 條目要記得「沒譯到 = NULL、不 copy name_jp 假裝有譯」。
+- **外部 sprite / 圖檔來源多源變體 fallback 規則**（2026-05-25 凌晨延伸 升級）：對「同一角色 / 同一卡」在不同網站有多個變體 URL 時、設計 cascade fetcher：
+  1. **試 base name slug** 先：`{name_slug}.png` → 不行 fallback 到 variant
+  2. **試世代 variant suffix**：`-gen3` / `-gen4` / `-gen5` / `-gen6` / `-usum` / `-lgpe` / `-s` / `-v` / `-bw` / `-bw2` 等（依資料源命名規律）
+  3. **試遊戲版本 prefix**：`Spr_BW_*.png` / `Spr_B2W2_*.png` / `Spr_HGSS_*.png` / `Spr_DPPt_*.png`（Bulbapedia file 規律）
+  4. **試 VS portrait variant**：`VS{Name}.png` / `{Name}_Masters_Sprite.png`（最後 fallback、風格可能不一致）
+- **fuzzy match 全外部 list 必須加 sanity check**：對「對映表 / sprite 列表」做 token-based fuzzy match 後、逐一人工 review candidate 跟 target 是否同人（用 name_zh + name_en 比對）、剔除明顯撞名 false positive。實證撞名案例：Cafe Master → mustard-master / Black Belt → furisodegirl-black / Professor Samson Oak → oak（不同人）。
+- **Bulbapedia file API 不同 endpoint 結果不一致、要用 direct title query**：(a) `query&titles=File:X.png&prop=imageinfo` 命中、(b) `query&list=allimages&aiprefix=X` 經常 0 hit、(c) `query&list=search&srsearch=X&srnamespace=6` 也經常 0 hit。**規則**：找特定 file 用 direct title query 試 N 個 candidate file name pattern、不依賴 search / allimages 列舉。
+- **artofpkm CDN 不設 CORS、前端 Canvas 處理跨域圖必走 same-origin proxy**：後端 `app/main.py:proxy_img` endpoint 自帶 `Access-Control-Allow-Origin: *` header + 白名單擋開放代理風險。白名單目前含 artofpkm.com / cdn.artofpkm.com / pokemondb.net / img.pokemondb.net / raw.githubusercontent.com。未來要前端 Canvas 處理新外部圖、加進白名單。
+- **AI 生圖（Pollinations.ai / DALL-E / Stable Diffusion）不能跟既有像素 sprite 風格無縫接合**：AI 生「pixel art」勉強做出「modern pixel illustration」（細緻 anti-aliasing 平滑 shading）、跟 16-bit ROM ripped sprite（低解析、簡化 outline、純色塊）並排明顯違和。**結論**：要「畫風統一」的補圖工作不寄望 AI、改走「多源 wiki scraping + sanity check」路線。
 
 ### UI 顯示慣例
 - **多語顯示三行置中**（2026-05-25 PM 升級）：character 角色頁、寶可夢圖鑑、set 列表卡片等含多語名顯示場景、**預設「主標中文 / 第二行日文 / 第三行英文」三行置中**（CSS `text-align:center`、各行同 class 同字體 / 字級、不混 main/sub 大小區別）。對應 frontend pattern：
@@ -226,17 +240,22 @@ $pid_=(netstat -ano | findstr ":8000 .*LISTENING").Split()[-1]; taskkill /F /PID
 - **自動挑選適合的 plugin / skill、不要等 user 提醒**：每個任務開始前掃 system reminder 列出的 skill 清單、跟任務 description 對得上就直接 invoke Skill tool。常見對應：寫 plan → `writing-plans` / `brainstorming`；排查 bug → `systematic-debugging`；完成前 → `verification-before-completion`；改 CLAUDE.md → `claude-md-management:revise-claude-md`；前端 UI → `frontend-design`；查文件 → context7 MCP；網頁測試 → playwright MCP。不確定要不要用、傾向「用」（using-superpowers 原則「1% chance 就用」）。
 - **長時爬蟲 / backfill 期間每 30-60 min 主動查 row 數**：不只看 driver log 的 ok/fail 計數、直接 query DB 看實際 row 寫入。連續幾百卡 0 row 就是異常、立即報 user + 提議暫停診斷。Driver 報告「ok」≠ 實際成功。
 - **踩到坑當下就記、不要等收工**：bug / 誤判 / 設計失誤 / 反覆撞同樣的錯 → 立刻 Edit `PROGRESS.md` `## Known Pitfalls` 區段加進去（不必先問、這是 documentation）、然後在回覆裡 mention「已加進 Known Pitfalls」讓 user 知道。避免 /wrap 時忘記細節。
-- **user 給 URL / 截圖 / 參考資料、第一動作必須是打開看實際內容**（2026-05-22 升級）：不可以憑檔名 / URL 路徑猜內容、不可以套用前面想的策略當作那個 URL 是。具體要做：
-  - URL → 用 WebFetch 或 playwright（wiki 之類防 WebFetch 的）打開、看 HTML 結構 / 資料樣本
+- **🔴 硬性規則：user 給的 URL 必強制用 playwright 真正進網頁看**（2026-05-25 升級、user 罵後加強）：不可以憑檔名 / URL 路徑猜內容、不可以靠 grep raw HTML 看 source code（看不到 JS 渲染後的真實內容、分頁、dropdown、SPA load 的列表）、不可以靠 WebFetch（會 sanitize 內容、漏 dynamic data）。具體要做：
+  - **URL（任何網頁）→ `mcp__plugin_playwright_playwright__browser_navigate` 強制**、即使看起來像「靜態 HTML」也要 playwright
+  - 然後 `browser_snapshot` / `browser_evaluate` 拿渲染後真實 DOM 內容
+  - **不可代替 playwright 的工具**：grep raw HTML source / httpx fetch + parse / WebFetch — 都看不到動態渲染結果
+  - **例外**：URL 是純 JSON API endpoint（如 `/api.php?action=opensearch&format=json`、GitHub API、openapi.json）— 這類 plain JSON 可用 httpx；任何 HTML 頁面就 playwright
   - 截圖 → 必須用 Read 看圖、不能憑檔名猜
   - 程式碼片段 / 設定檔 → 必須讀完整檔
   - 看完才能回應 user 或設計策略
-  - **同一 session 我已違反 2 次被罵**：(a) user 訊息「set to set」我直接寫腳本沒問意圖、(b) user 給 wiki URL「花椰猴（BW-P）」我沒點開直接套用前面 wiki search by jp 名策略。已存進 [feedback memory](memory/feedback_check_user_urls_first.md)。
+  - **連續違反史**：(a) 5/22 user 訊息「set to set」我直接寫腳本沒問意圖、(b) 5/22 user 給 wiki URL「花椰猴（BW-P）」我沒點開直接套用前面 wiki search by jp 名策略、(c) 5/25 user 給 asia.pokemon-card.com/tw/card-search/、我 grep raw HTML 看 expansionCodes 出 20 個就以為 ＝ 全部、漏看分頁 1/2/3/4/5、user 回「官網不只 20 set 你又沒有點進去看了」。已存進 [feedback memory](memory/feedback_force_playwright_for_user_urls.md)。
 - **修改全域設定（CSS body font / font stack / 全域 class / API 共用 schema 等）時、優先用 scope 區分而非全域 override**（2026-05-22 升級）：全域 override 副作用不可控、會傷其他元素。對「想動 A 不要動 B」的需求、用 CSS class scope / lang attribute / namespace 等 scope 工具精準框範圍。實證：今天改 DotGothic16 字體 stack 把它放進 body font-family fallback、結果它無 unicode-range 限制、搶到所有 CJK 漢字、user 看到首頁中文「寶可夢卡牌」也變 pixel 反彈「不能只改 X 嗎、其他中文也被改掉了」。正解：加 `.jp-pixel` class wrap 日文段、CSS 用兩個 @font-face（一個 unicode-range 限制版進 body、一個無限制版只給 class 用）。**通則**：CSS / 字體 / 配置改動前自問「這改動會不會搶到我沒預期的元素？」、若答 yes、用 class / scope 工具隔離、不要全域改。
 - **設計類決策（字體 / 排版 / 配色 / 元件樣式）優先生 preview / mockup 給 user 看、不要只用文字描述**（2026-05-22 升級）：user 對視覺敏感、文字描述「Plus Jakarta Sans 圓潤現代」對 user 沒實際意義、要看到才能決定。實作方式：建一個 `_*_preview.html` 或 `_*_mockup.html`（依 `.gitignore` 規則 local-only）、含所有候選 option 的視覺呈現（同一段 sample text 各 option 渲染）、給 user URL 看完選一個。實證：今天字體選擇先用 AskUserQuestion 列 4 個英文字體文字選項、user 選 "Other: Superpowers Brainstorming顯示給我看"、改成寫 `_font_preview.html` 含 31 種字體（英 15 / 中 4 / 日 12）才有效。**通則**：設計類決策、AskUserQuestion 文字選項不夠、要 visual mockup。
 - **UI / 視覺改動「邊做邊看」原則**（2026-05-22 升級）：implementation 階段遇到任何 UI 改動（layout / modal / 圖示 / 顏色 / 表格 / 元件 / 視覺風格 等）、優先順序是「先做可看的 mockup → user 看 → 確認 OK 才進下個 phase」。具體做法：(a) inline write code、playwright 截 screenshot 發給 user 看、(b) 或 push 到 visual companion 給 user 點選。**不要「寫一大堆 code 後 user 才看」**。MVP / 開發階段尤其適用。複雜 UI 一次截多張 screenshot 比較。實證：今天 portfolio 功能用此流程跑、寫 1 段 UI 截圖 → user 看 → 改 → 再截 → ... 反覆 6-7 輪、最終出來的 UI 完全對齊 user 心目中的、沒有「做完才發現方向錯」的浪費。
 - **長時 backfill 跑完每個卡盒系列、自動列高稀有度 0 row 卡清單給 user verify**（2026-05-22 確立）：每個 set（pg）跑完後、列出該 set 中 `ebay_prices_synced_at IS NOT NULL` 但 `card_prices` 0 row 的高稀有度卡（SAR / SR / UR / AR / RR / HR / CHR / SSR / CSR / MUR）給 user 手動 eBay 搜尋 verify。表格欄位：**卡號 / 稀有度 / 日文名 / 英文名**。**普卡（C / U / R / 無標示）省略**（賣家很少送 PSA 10、列出 100+ 張 user 也難逐張 verify、列了反而干擾）。user 收到後手動驗證、如果發現某張卡實際 eBay 有資料 → 表示我們 query 設計仍有 false negative、回頭針對該卡的真實 listing title 模式 micro-adjust query。實證：5/22 跑 5 pg 共 1,282 卡、列 71 張高稀有度 0 row 給 user verify。**未來其他 backfill（EN 卡表 / 新 set / 重 sync 等）都適用此流程**。
+- **多輪視覺化檢查頁（review HTML）是 trainer / scraper / 多源整合寫 DB 前的標準動作**（2026-05-25 凌晨延伸 升級）：本專案處理「來源不齊、要從多個外部站接力撈圖 / 資料」這類工作、固定流程：(a) 生 `_*_review.html` grid 列全 N 項 + 每項標來源 tag + checkbox + 「匯出名單」按鈕 + cache buster URL、(b) `python -m http.server 8081` serve 給 user、(c) user 視覺挑要重做的、勾完匯出 id 清單貼回對話、(d) 我針對性處理回來、重生 review HTML 再給 user 看下一輪、(e) 直到 user 滿意。實證 2026-05-25 訓練家分類頁像素風 6 輪 review HTML、最終 99% 覆蓋。**通則**：未來爬蟲補圖 / 翻譯校對 / set 對映 / outlier 識別 等「人工介入比 LLM 判準確」的場景都套這流程、不要直接動 DB。
 - **scraper / 補抓寫 DB 前、要先 visual report 給 user verify 再寫**（2026-05-24 升級）：scraper 撈到的新資料、寫進 DB 前**先做 visual report HTML**（含卡圖 + listing 縮圖 + 標題 + 價格 + 標記按鈕「×同卡漏抓」/「✓驗過真 0」+ 改英文名 + localStorage 持久化 + 匯出 markdown 回報）、用 `python -m http.server 8081` serve 給 user 看、user 視覺判斷哪些是真同卡 / 哪些是跨 set 污染、標記後**匯出回報清單**貼回對話、我才實際 INSERT card_prices。**避免直接寫 DB 後發現污染要 revert**。實證：5/24 對 54 張 0-row 用 v2 query 重爬、user 視覺判斷 1/54 漏抓 (Psyduck AR)、其他 53 是市場真 0 或跨 set 污染 — 避免錯誤寫 53 筆。**通則**：所有 scraper / 補抓 / 重爬任務、寫 DB 前都用 visual companion 視覺化、user verify 後再 commit DB。**唯一例外**：(a) user 明確說「全部寫進去」、(b) 寫量 < 5 筆的小量補、(c) 全量 backfill（如 5/22 1,282 卡 PSA-label v2、太多沒法逐張 verify、靠 query 設計 precision 保證）。實作參考：`_recrawl_54_html.py` template。
+- **UI 改動交付給 user 評估、一律用可互動 URL、不能用靜止 screenshot**（2026-05-25 user explicit feedback 升級、supersede 上條「邊做邊看」原則的 (a) screenshot 做法）：user 明說「以後不要給我看截圖 看視覺化虛擬功能我才能評估」。Screenshot 看不到 hover / click / animation / modal 開合等動態行為。**標準 workflow**：UI 改動 → 改進 production `..\卡波\index.html` → 給 user 帶 cache bust 的 URL (`http://localhost:8080/index.html?v=N#/<view>?<params>`、或雙擊 `..\卡波\卡波.hta` HTA 自動 cache bust) → user 自己打開瀏覽器操作評估。不再用 playwright screenshot + SendUserFile workflow。**例外**：(a) 設計類決策、多 option 比較（字體 / 配色 / 排版 mockup）仍可建獨立 `_*_mockup.html` 給 user 對比、(b) 我自己 debug 看 layout 是否 render OK（不丟 user）、(c) 5/24 升級「scraper 寫 DB 前 visual report」流程仍有效（那是 verify 工具不是 UI demo）。**通則**：交付給 user 評估的 = 可互動 production URL、不是靜止 image。
 
 ## 編碼行為準則
 
