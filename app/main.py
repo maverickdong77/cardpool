@@ -921,14 +921,24 @@ async def _resolve_snkr_title_to_card(db, title: str) -> tuple[str | None, str |
 def _compute_image_url_local(thumb_url: str | None) -> str | None:
     """把 jp_card_list.thumb_url 轉成可直接給瀏覽器用的本站卡圖 URL。
 
-    三種格式都支援：
+    四種格式都支援：
     - 相對路徑 `/assets/images/...` → 拼 pokemon-card.com 前綴
     - artofpkm 完整 URL `https://www.artofpkm.com/...` → 直接用
-    - SNKR cdn URL `https://cdn.snkrdunk.com/...` → 直接用（M5 等新 set 補抓用 SNKR 圖）
+    - SNKR cdn URL `https://cdn.snkrdunk.com/...` → 包成 /api/cropped_snkr_img 自動裁透明邊
+      （SNKR upload_bg_removed 是 1000×730 橫式畫布、卡牌主體只占中央約 429×610 直式、
+       左右大量透明 padding；直接 <img> 顯示會在直式 5:7 容器內顯得很小）
+    - 其他完整 URL → 直接用
     """
     if not thumb_url:
         return None
     if thumb_url.startswith("http://") or thumb_url.startswith("https://"):
+        if "cdn.snkrdunk.com" in thumb_url:
+            import os
+            from urllib.parse import quote
+            api_base = os.getenv("API_PUBLIC_BASE", "http://localhost:8000")
+            # v=<SNKR_CROP_REV> 用來繞 browser cache；endpoint 邏輯改動時 bump 這個值
+            crop_rev = os.getenv("SNKR_CROP_REV", "hd1")
+            return f"{api_base}/api/cropped_snkr_img?url={quote(thumb_url, safe='')}&v={crop_rev}"
         return thumb_url
     if thumb_url.startswith("/"):
         return "https://www.pokemon-card.com" + thumb_url
@@ -2199,7 +2209,7 @@ async def get_card_prices(set_id: str, card_number: str):
             cur_jp = await db.execute("""
                 SELECT jcl.cardID,
                        jcl.name_jp,
-                       ('https://www.pokemon-card.com' || jcl.thumb_url) AS image_url,
+                       (CASE WHEN jcl.thumb_url LIKE 'http%' THEN jcl.thumb_url ELSE 'https://www.pokemon-card.com' || jcl.thumb_url END) AS image_url,
                        jcl.rarity, jcl.set_code,
                        COALESCE(jcls.name_jp, jcl.set_name_jp) AS set_name,
                        jcl.hp, jcl.illustrator, jcl.card_number,
@@ -2220,7 +2230,7 @@ async def get_card_prices(set_id: str, card_number: str):
                     "name": None,
                     "name_jp": jrow["name_jp"],
                     "name_zh": _name_zh_fb,
-                    "image_url": jrow["image_url"],
+                    "image_url": _compute_image_url_local(jrow["image_url"]),
                     "rarity": jrow["rarity"],
                     "rarity_ocr": None,
                     "psa_pop10": None, "psa_pop9": None, "psa_pop8": None,
@@ -2432,6 +2442,27 @@ async def get_card_prices(set_id: str, card_number: str):
             except Exception:
                 orderbook[str(g)] = None
 
+        # Fallback：對應的 SNKR 商品掛賣價（不分 grade、給 detail 頁無 PSA 10 成交時顯示）
+        snkr_listing = None
+        try:
+            cur_l = await db.execute("""
+                SELECT apparel_id, price_jpy, image_url, title FROM snkr_hot_items
+                WHERE set_id=? AND card_number=?
+                  AND batch_id=(SELECT batch_id FROM snkr_hot_items ORDER BY fetched_at DESC LIMIT 1)
+                ORDER BY rank ASC LIMIT 1
+            """, (set_id, card_number))
+            lrow = await cur_l.fetchone()
+            if lrow:
+                snkr_listing = {
+                    "apparel_id": lrow["apparel_id"],
+                    "price_jpy": lrow["price_jpy"],
+                    "image_url": lrow["image_url"],
+                    "title": lrow["title"],
+                    "url": f"https://snkrdunk.com/apparels/{lrow['apparel_id']}",
+                }
+        except Exception:
+            pass
+
         # Lazy refresh trigger: 30 天過期 + 24h 兩次限制、non-blocking
         try:
             asyncio.create_task(_maybe_lazy_refresh_pop(
@@ -2450,6 +2481,7 @@ async def get_card_prices(set_id: str, card_number: str):
             "stats": stats,
             "sync_history": sync_history,
             "orderbook": orderbook,
+            "snkr_listing": snkr_listing,
         }
 
 
@@ -4163,6 +4195,62 @@ async def category_character_list():
         ]
 
 
+@app.get("/api/cropped_snkr_img")
+async def cropped_snkr_img(url: str):
+    """代理 SNKR cdn 卡圖、裁掉透明邊（橫式畫布 → 直式卡牌）後回傳 PNG。
+
+    SNKR `/upload_bg_removed/` 是 1000×730 橫式畫布、卡牌主體只占中央約 429×610（直式）、
+    左右大量透明 padding。直接 <img> 顯示會在直式 5:7 容器內顯得很小（user 抱怨「卡圖大小跟網站設定不同」）。
+    這 endpoint fetch + PIL alpha-bbox crop + 回 PNG、瀏覽器拿到就是 cropped 直式卡。
+    """
+    from urllib.parse import urlparse, urlsplit, urlunsplit
+    host = urlparse(url).netloc.lower()
+    if not (host == "cdn.snkrdunk.com" or host.endswith(".cdn.snkrdunk.com")):
+        return PlainTextResponse("host not allowed", status_code=403)
+
+    # SNKR cdn 同一張圖 4 種 size：?size=s/m/l/xl、xl == 無 param 都是原圖（1000×730）
+    # 為了清晰度、強制升級到原圖再 crop（避免「拿 m 縮圖 → crop → 瀏覽器再放大 → 模糊」）
+    sp = urlsplit(url)
+    upstream_url = urlunsplit((sp.scheme, sp.netloc, sp.path, "", sp.fragment))
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
+            r = await client.get(upstream_url, headers={"User-Agent": "Mozilla/5.0 cardpool-proxy"})
+    except Exception as e:
+        return PlainTextResponse(f"fetch error: {e}", status_code=502)
+    if r.status_code != 200:
+        return PlainTextResponse(f"upstream {r.status_code}", status_code=502)
+
+    try:
+        from PIL import Image
+        from io import BytesIO
+        img = Image.open(BytesIO(r.content))
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        bbox = img.getbbox()
+        if bbox:
+            img = img.crop(bbox)
+        out = BytesIO()
+        img.save(out, format="PNG", optimize=True)
+        body = out.getvalue()
+    except Exception as e:
+        return PlainTextResponse(f"crop error: {e}", status_code=500)
+
+    import hashlib
+    etag = '"' + hashlib.md5(body).hexdigest() + '"'
+    return Response(
+        content=body,
+        media_type="image/png",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            # 短 cache + ETag、避免 endpoint 邏輯改動後瀏覽器拿舊結果
+            "Cache-Control": "public, max-age=300, must-revalidate",
+            "ETag": etag,
+        },
+    )
+
+
 @app.get("/api/proxy_img")
 async def proxy_img(url: str):
     """代理外部圖（artofpkm / pokemondb / PokeAPI sprites）並回 CORS header。
@@ -4174,6 +4262,7 @@ async def proxy_img(url: str):
         "artofpkm.com", "cdn.artofpkm.com",
         "pokemondb.net", "img.pokemondb.net",
         "raw.githubusercontent.com",
+        "cdn.snkrdunk.com",
     )
     if not any(host == d or host.endswith("." + d) for d in ALLOWED):
         return PlainTextResponse("host not allowed", status_code=403)
@@ -4238,7 +4327,7 @@ async def category_pokemon_cards(pkm_id: int, language: str | None = None):
                 SELECT jcl.pg AS set_id, jcl.set_code AS _set_code,
                        jcls.name_jp AS _set_full, jcls.release_date,
                        jcl.card_number, jcl.name_jp,
-                       ('https://www.pokemon-card.com' || jcl.thumb_url) AS image_url, jcl.rarity
+                       (CASE WHEN jcl.thumb_url LIKE 'http%' THEN jcl.thumb_url ELSE 'https://www.pokemon-card.com' || jcl.thumb_url END) AS image_url, jcl.rarity
                 FROM jp_card_list jcl
                 LEFT JOIN jp_card_list_set jcls ON jcls.pg = jcl.pg
                 WHERE jcl.name_jp LIKE ? AND jcl.thumb_url IS NOT NULL
@@ -4406,7 +4495,7 @@ async def category_character_cards(char_id: int, language: str | None = None):
                        jcls.name_jp AS _set_full,
                        jcls.release_date,
                        jcl.card_number, jcl.name_jp,
-                       ('https://www.pokemon-card.com' || jcl.thumb_url) AS image_url,
+                       (CASE WHEN jcl.thumb_url LIKE 'http%' THEN jcl.thumb_url ELSE 'https://www.pokemon-card.com' || jcl.thumb_url END) AS image_url,
                        jcl.rarity
                 FROM jp_card_list jcl
                 LEFT JOIN jp_card_list_set jcls ON jcls.pg = jcl.pg
