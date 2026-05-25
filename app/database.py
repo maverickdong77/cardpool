@@ -378,11 +378,12 @@ def init_db():
             is_box INTEGER DEFAULT 0,
             set_id TEXT,
             card_number TEXT,
+            image_url_local TEXT,
             fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # idempotent ALTER（前一版表沒這兩欄）
-    for col, typ in [("set_id", "TEXT"), ("card_number", "TEXT")]:
+    # idempotent ALTER（前一版表沒這幾欄）
+    for col, typ in [("set_id", "TEXT"), ("card_number", "TEXT"), ("image_url_local", "TEXT")]:
         try:
             cursor.execute(f"ALTER TABLE snkr_hot_items ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
@@ -442,6 +443,51 @@ def init_db():
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_box_chart_apparel ON snkr_box_chart_points(apparel_id, size_id)")
+
+    # ========== price_alerts：到價通知 (2026-05-25 加) ==========
+    # user 對某盒裝設「跌到 X / 漲到 Y」通知
+    # target_type: 'box' (現只支援盒裝、未來可擴 'card')
+    # direction: 'below' (價格跌到 ≤ target 觸發) / 'above' (漲到 ≥ target 觸發)
+    # status: 'active' / 'triggered' / 'cancelled'
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS price_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            target_type TEXT NOT NULL DEFAULT 'box',
+            apparel_id INTEGER NOT NULL,
+            direction TEXT NOT NULL CHECK(direction IN ('below', 'above')),
+            target_price_jpy INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'triggered', 'cancelled')),
+            triggered_price_jpy INTEGER,
+            triggered_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_user ON price_alerts(user_id, status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_apparel ON price_alerts(apparel_id, status)")
+
+    # ========== notifications：站內未讀通知 (2026-05-25 加) ==========
+    # 通用通知 (到價觸發 / 交易成交 / 系統公告 等)
+    # kind: 'price_alert' / 'trade_matched' / 'system'
+    # channel: 'inapp' (站內) / 'line' (推送 LINE)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT,
+            link_url TEXT,
+            channel TEXT NOT NULL DEFAULT 'inapp',
+            line_pushed INTEGER NOT NULL DEFAULT 0,
+            read_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notif_user_unread ON notifications(user_id, read_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at DESC)")
 
     # ========== set_backfill_jobs：補卡盒任務排隊表（2026-05-24 加）==========
     cursor.execute("""
@@ -861,10 +907,12 @@ async def get_all_card_sets(language: str = "jp") -> list:
                        s.name_zh,
                        s.card_count AS total_cards,
                        s.logo_url,
+                       s.release_date,
+                       s.order_in_official,
                        em.era AS era
                 FROM tw_card_list_set s
                 LEFT JOIN tw_set_era_map em ON em.expansion_code = s.expansion_code
-                ORDER BY s.expansion_code DESC
+                ORDER BY COALESCE(s.order_in_official, 99999), s.release_date DESC, s.expansion_code DESC
             """)
             for row in await cursor.fetchall():
                 d = dict(row)
@@ -875,7 +923,8 @@ async def get_all_card_sets(language: str = "jp") -> list:
                     "name_zh": d.get("name_zh"),
                     "logo_url": d.get("logo_url"),
                     "total_cards": d.get("total_cards"),
-                    "release_date": None,
+                    "release_date": d.get("release_date"),
+                    "order_in_official": d.get("order_in_official"),
                     "era": d.get("era") or "Other",
                     # 前端 filterByLang('tw') 不需 art_id，但為了相容 setCardHtml 也帶上
                     "art_id": d["set_id"],

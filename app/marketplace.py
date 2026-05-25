@@ -42,6 +42,20 @@ def _validate_price(price) -> float:
 
 
 async def _card_exists(set_id: str, card_number: str) -> bool:
+    # Box marketplace (2026-05-25 加): 用 set_id='__box__' + card_number=apparel_id 偽 ID
+    # 改 check snkr_box_items 表、不去 card_list 找
+    if set_id == "__box__":
+        try:
+            apparel_id_int = int(card_number)
+        except ValueError:
+            return False
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM snkr_box_items WHERE apparel_id=? LIMIT 1",
+                (apparel_id_int,),
+            )
+            return await cur.fetchone() is not None
+
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT 1 FROM card_list WHERE set_id=? AND card_number=? LIMIT 1",
@@ -96,6 +110,60 @@ async def get_orderbook(set_id: str, card_number: str, grade: int) -> dict:
         "last_trade_price": last["price_twd"] if last else None,
         "last_trade_at": (last["completed_at"] or last["created_at"]) if last else None,
     }
+
+
+async def get_orderbook_depth(set_id: str, card_number: str, grade: int, limit: int = 20) -> dict:
+    """回傳訂單簿深度：ASK 全 list (低→高) + BID 全 list (高→低)、各取前 limit 筆。
+    Box marketplace 用：盒裝詳情頁顯多筆掛單。隱藏 user_id、只回 masked alias。
+    """
+    grade = _validate_grade(grade)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        ask_cur = await db.execute(
+            """SELECT l.id, l.user_id, l.ask_price_twd AS price, l.created_at,
+                      COALESCE(u.display_name, 'user_' || l.user_id) AS user_name
+               FROM listings l
+               LEFT JOIN users u ON u.id = l.user_id
+               WHERE l.set_id=? AND l.card_number=? AND l.grade=? AND l.status='active'
+               ORDER BY l.ask_price_twd ASC, l.created_at ASC
+               LIMIT ?""",
+            (set_id, card_number, grade, limit),
+        )
+        asks = [dict(r) for r in await ask_cur.fetchall()]
+
+        bid_cur = await db.execute(
+            """SELECT b.id, b.user_id, b.bid_price_twd AS price, b.created_at,
+                      COALESCE(u.display_name, 'user_' || b.user_id) AS user_name
+               FROM bids b
+               LEFT JOIN users u ON u.id = b.user_id
+               WHERE b.set_id=? AND b.card_number=? AND b.grade=? AND b.status='active'
+               ORDER BY b.bid_price_twd DESC, b.created_at ASC
+               LIMIT ?""",
+            (set_id, card_number, grade, limit),
+        )
+        bids = [dict(r) for r in await bid_cur.fetchall()]
+
+    # Mask user_name 隱私 (保留前 2 字、後綴 ***)
+    def _mask(name):
+        if not name:
+            return 'user_***'
+        if len(name) <= 2:
+            return name + '***'
+        return name[:2] + '***'
+
+    for row in asks + bids:
+        row['user_name'] = _mask(row['user_name'])
+        row.pop('user_id', None)  # 不回 user_id
+
+    return {
+        'set_id': set_id,
+        'card_number': card_number,
+        'grade': grade,
+        'asks': asks,
+        'bids': bids,
+    }
+
 
 
 # ============================================================
