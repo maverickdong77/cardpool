@@ -2128,11 +2128,13 @@ async def get_card_prices(set_id: str, card_number: str):
                        FROM card_prices
                        WHERE set_id=cl.set_id AND card_number=cl.card_number
                          AND psa_grade=10 AND sale_date > datetime('now', '-90 days')
-                      ) AS psa10_market_n
+                      ) AS psa10_market_n,
+                      m.spec_id AS psa_spec_id
                FROM card_list cl
                LEFT JOIN card_sets cs ON cl.set_id = cs.set_id
                LEFT JOIN card_volume_stats v ON v.set_id = cl.set_id AND v.card_number = cl.card_number
                LEFT JOIN jp_card_list jcl ON jcl.pg = cl.set_id AND jcl.card_number = cl.card_number
+               LEFT JOIN psa_apr_card_mapping m ON m.set_id = cl.set_id AND m.card_number = cl.card_number
                WHERE cl.set_id=? AND cl.card_number=?""",
             (set_id, card_number),
         )
@@ -2187,6 +2189,7 @@ async def get_card_prices(set_id: str, card_number: str):
                 if row and (row["psa10_market_n"] or 0) >= 5
                 else ("psa_official_fallback" if row else None)
             ),
+            "psa_spec_id": row["psa_spec_id"] if row else None,
         } if row else None
 
         # Fallback: pg=950 / 9001 / 9002 / 9003 等尚未 INSERT 到 card_list 的 JP set，
@@ -2243,6 +2246,7 @@ async def get_card_prices(set_id: str, card_number: str):
                     "psa10_market_jpy": None,
                     "psa10_market_n": 0,
                     "psa10_market_source": None,
+                    "psa_spec_id": None,
                 }
 
         # Path 3 fallback: EN set (me4 / mep 等 en_card_list 表的資料、card_list / jp_card_list 都不含)
@@ -2314,6 +2318,7 @@ async def get_card_prices(set_id: str, card_number: str):
                     "psa10_market_jpy": None,
                     "psa10_market_n": 0,
                     "psa10_market_source": None,
+                    "psa_spec_id": None,
                 }
 
         # JP set 補翻譯：若 name_zh 為空、用 _translate_jp_card_name_to_zh 算（path 1 / path 2 共用）
