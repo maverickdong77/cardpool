@@ -137,6 +137,37 @@ class PSASession:
                 seen.append(sid)
         return seen
 
+    SPEC_LINK_TITLE_RE = re.compile(
+        r'<a[^>]*href="(?:/spec/psa/)(\d+)"[^>]*>([^<]+)</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    def search_spec_ids_with_titles(self, query: str) -> list[tuple[str, str]]:
+        """搜尋頁 → list of (spec_id, anchor_text)、最多前 30 個。
+        anchor_text 含 '#{card_number}' + 卡名 + 稀有度、可用於 post-filter。
+        """
+        from urllib.parse import quote
+        url = f"{PSA_BASE}/auctionprices/search?q={quote(query)}"
+        try:
+            self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            for _ in range(15):
+                self._page.wait_for_timeout(500)
+                if "Just a moment" not in self._page.title():
+                    break
+            try:
+                self._page.wait_for_selector('a[href^="/spec/psa/"]', timeout=8000)
+            except Exception:
+                pass
+            html = self._page.content()
+        except Exception:
+            return []
+        seen: dict[str, str] = {}
+        for m in self.SPEC_LINK_TITLE_RE.finditer(html):
+            sid, title = m.group(1), m.group(2).strip()
+            if sid not in seen:
+                seen[sid] = title
+        return list(seen.items())
+
     # ---- salesHistory ----
     def get_sales_history(self, spec_id: str, page_size: int = 100) -> list[dict]:
         url = API_URL.format(spec_id=spec_id, ps=page_size)
