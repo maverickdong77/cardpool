@@ -70,8 +70,8 @@ $pid_=(netstat -ano | findstr ":8000 .*LISTENING").Split()[-1]; taskkill /F /PID
 | `card_list` | ~50k | 多語言主卡表、PK=id；`cards` 表是 PSA cert 用途暫未使用 |
 | `jp_card_list` | 21,552 | **JP 體系主表**、PK=cardID、含 card_number、`prices_synced_at`（SNKR）、`ebay_prices_synced_at` |
 | `jp_card_list_set` | 368 | JP set 主表、`name_jp` 格式為 `日文 (中文)`（用 `lastIndexOf(' (')` 拆）— **pg→中文名對照表查 `docs/jp_sets_lookup.md`**（user 聽不懂 pg 數字、提到具體 set 要附中文名）|
-| `card_prices` | ~107k | **統一價格表**、UNIQUE 鍵 `(set_id, card_number, source, listing_url)`、不依 cardID；2026-05-18 Phase 4 之後 JP eBay 子集從 132k junk → 10,407 清版 |
-| `snkrdunk_mapping` | 232k | SNKR product → card 對映、`is_pokemon` flag 歷史誤標多（已 sweep 修補 3,604 rows）|
+| `card_prices` | ~107k | **統一價格表**、UNIQUE 鍵 `(set_id, card_number, source, listing_url)`、不依 cardID |
+| `snkrdunk_mapping` | 232k | SNKR product → card 對映、`is_pokemon` flag 標記是否為寶可夢卡 |
 | `pokemon_dict` | 1,025 | EN/JP/romaji 寶可夢名字典（全國圖鑑覆蓋）|
 | `jp_term_dict` | 1,495 | **trainer/energy/item JP→EN 字典**、Bulbapedia `\|jname=` 多源驗證、source 欄含 `bulba_jname_verified` / `user_manual`、`_translate_jp_card_name_to_en` fallback 在 pokemon_dict miss 後查這裡 |
 | `en_card_list` / `tw_card_list` | 20k / 11k | EN / TW 體系、目前只 SNKR/eBay 部分覆蓋 |
@@ -146,15 +146,9 @@ $pid_=(netstat -ano | findstr ":8000 .*LISTENING").Split()[-1]; taskkill /F /PID
 
 - **改 DB 前先 backup**：`cp cards.db cards.db.before-<reason>-YYYYMMDD-HHMMSS`、根目錄常見 `cards.db.before-jp-set-trans-batch{N}-*` / `before-promo-fixes-*` / `before-ispokemon-fix-*` / `before-resync-zeroprice-*` / `before-ebay-backfill-*` 等。
 - **DB 改動腳本以 `_` 開頭命名**：`_apply_*.py`、`_backfill_*.py`、`_audit_*.py` 等。產生的審閱 markdown 是 `TRANSLATION_REVIEW_BATCH{N}.md`。
-- **jp_term_dict 建構流程**（2026-05-17 建立）：
-  - `_identify_untranslated.py` → 抽出 `pokemon_dict` 翻譯不到的 unique JP 名 → `_untranslated_jp_names.txt`
-  - `_build_jp_term_dict.py` → 跑 Bulbapedia search（`insource:"name"` + title fallback）+ pokemontcg.io corpus 交叉、cache 在 `_term_dict_cache/`、輸出 `_term_dict_candidates.jsonl`
-  - `_verify_jp_term_dict.py` → 對 candidates fetch Bulbapedia 文章 wikitext、確認 `\|jname=<name>`（NFKC normalize 處理全/半形）、降 confidence 給未驗證的 → `_term_dict_verified.jsonl` + `_term_dict_review.md`
-  - `_manual_overrides.py` → 補 Bulbapedia 找不到的（N、Dawn、Mallow、Janine、Gloria、Black/White Kyurem 等）
-  - `_apply_jp_term_dict.py --jsonl _term_dict_verified.jsonl` → 寫入 DB（INSERT OR REPLACE）
 - **改 backend 必重啟**：`reload=False`、HTA 起的 PID 跑舊 code 直到手動 kill+重啟。
 - **日工作記錄寫在姊妹目錄**：`C:\Users\Dong Ying\Desktop\卡波\工作統整_YYYY-MM-DD.md`、依日期追加章節（最後 §N 結尾接新 §N+1）。
-- **JP eBay 覆蓋預期（Phase 4 後）**：21,552 卡中 86.2% 0-hit（trade-off：precision ≥95%、recall ~14%）。trainer 桶（ナンジャモ/ボスの指令/ハイパーボール 等）覆蓋率最低、因 token filter 嚴格。要放寬看 `app/scraper/ebay.py:_title_has_card_name_token`。
+- **JP eBay 覆蓋現況**：21,552 卡中 86.2% 0-hit（trade-off：precision ≥95%、recall ~14%）。trainer 桶（ナンジャモ/ボスの指令/ハイパーボール 等）覆蓋率最低、因 token filter 嚴格。要放寬看 `app/scraper/ebay.py:_title_has_card_name_token`。
 - **eBay `_NAME_STOPWORDS` 含 rarity tail**（2026-05-19 升級）：`SAR / SR / UR / AR / RR / HR / CHR / SSR / TG / PR / TR` 全在 stopwords 內、不參與 EN token AND match。賣家標題常省略稀有度（如 `Mega Charizard X ex #110 PSA 10` 沒寫 SAR）、AND filter 不放這些 tail 會誤排 90% 以上 listing。實測對 949/110 SAR 從 6 → 593 row（12.9x）、抽 10 row 9/10 同名同卡（1/10 lot 標題）。**未來改 ebay scraper、不要把 rarity tail 拿出 stopwords**。trade-off：precision 95% → ~90%、recall 14% → 30-50%。
 - **SNKR / eBay lookup：set_code 第一優先 + 寧缺勿錯**（2026-05-19 升級）：跨 set 同名同號污染（例 M2a Mega Dream vs M1L Mega Brave 都有 メガルカリオex #92）是歷史 lookup fallback 的大坑。`_lookup_apparel_id` 已改用 Stage 0 = `WHERE set_code=? COLLATE NOCASE AND card_number=?`、最精準。**若 caller 給了 set_code 但 SNKR mapping 沒對應、就直接 `return None`、不要走 Stage 1-3 set_name/card_name fallback**（fallback 會跨 set 亂抓、產生 cross-set pollution）。寧可前端顯示「暫無紀錄」、不要顯示錯卡的價格。同邏輯適用於 eBay scraper 未來如果建 mapping。caller chain（main.py 的 sync endpoints）必須從 jp_card_list.set_code 取後傳入。
 
