@@ -964,13 +964,56 @@ async def get_cards_by_set(set_id: str) -> list:
                 SELECT ? AS set_id,
                        c.cardID,
                        c.card_number, c.name_jp, c.thumb_url AS image_url,
-                       c.rarity, c.illustrator, c.hp, c.image_id
+                       c.rarity, c.illustrator, c.hp, c.image_id,
+                       c.set_code
                 FROM jp_card_list c
                 JOIN jp_card_pg_link l ON l.cardID = c.cardID
                 WHERE l.pg = ?
                 ORDER BY CAST(c.card_number AS INTEGER), c.image_id
             """, (set_id, set_id))
             rows = [dict(r) for r in await cursor.fetchall()]
+
+            # 變體擴張：對每張卡查 snkrdunk_mapping 找非 standard variant、複製 row 加 variant 欄
+            # 變體：mirror / pokeball / masterball / type_pattern / rocket / special_art
+            set_codes = {r.get('set_code') for r in rows if r.get('set_code')}
+            variants_by_key: dict = {}  # (set_code_upper, card_number) → list[variant dict]
+            if set_codes:
+                placeholders = ','.join('?' for _ in set_codes)
+                cur_v = await db.execute(
+                    f"""SELECT UPPER(set_code) AS set_code_u, card_number, variant, variant_marker, apparel_id, image_url
+                        FROM snkrdunk_mapping
+                        WHERE UPPER(set_code) IN ({placeholders})
+                          AND variant != 'standard'
+                          AND is_pokemon = 1""",
+                    tuple(sc.upper() for sc in set_codes),
+                )
+                for vr in await cur_v.fetchall():
+                    key = (vr['set_code_u'], vr['card_number'])
+                    variants_by_key.setdefault(key, []).append({
+                        'variant': vr['variant'],
+                        'variant_marker': vr['variant_marker'],
+                        'apparel_id': vr['apparel_id'],
+                        'image_url': vr['image_url'],
+                    })
+
+            expanded = []
+            for r in rows:
+                r['variant'] = 'standard'
+                r['variant_marker'] = None
+                expanded.append(r)
+                sc = r.get('set_code')
+                cn = r.get('card_number')
+                if sc and cn:
+                    for v in variants_by_key.get((sc.upper(), cn), []):
+                        r_copy = dict(r)
+                        r_copy['variant'] = v['variant']
+                        r_copy['variant_marker'] = v['variant_marker']
+                        r_copy['variant_apparel_id'] = v['apparel_id']
+                        # 變體有自己的卡圖：用 SNKR cdn 圖、缺則 fallback standard 圖
+                        if v.get('image_url'):
+                            r_copy['image_url'] = v['image_url']
+                        expanded.append(r_copy)
+            rows = expanded
 
             # promo set (9001/9002/9003) 為各期 promo 集合、每張卡發售日期不同
             # 用 cardID 對照各非-promo expansion 的 min_cardID 推算 inferred_release_date

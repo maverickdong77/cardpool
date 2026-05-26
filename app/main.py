@@ -2122,8 +2122,13 @@ def _sync_single_psa_pop_refresh(set_id: str, card_number: str):
 
 
 @app.get("/api/prices/{set_id}/{card_number}")
-async def get_card_prices(set_id: str, card_number: str):
-    """取得卡片的價格歷史（會套用 listing_title 安全網過濾舊污染資料）"""
+async def get_card_prices(set_id: str, card_number: str, variant: str | None = None):
+    """取得卡片的價格歷史（會套用 listing_title 安全網過濾舊污染資料）。
+
+    variant: 可選、'standard' / 'mirror' / 'pokeball' / 'masterball' /
+             'type_pattern' / 'rocket' / 'special_art'。
+             不傳 = 全 variant、傳 = 只該 variant。
+    """
     import aiosqlite
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -2366,15 +2371,19 @@ async def get_card_prices(set_id: str, card_number: str):
 
         # 取得價格歷史
         # 只回必要欄位，省 payload (省 listing_title 等大 text 一半 size)
-        cursor = await db.execute("""
+        # variant 可選：給了只回該 variant、不給回全部
+        _v_filter = " AND variant = ?" if variant is not None else ""
+        _v_params = (variant,) if variant is not None else ()
+        cursor = await db.execute(
+            f"""
             SELECT id, source, price_jpy, price_usd, price_twd,
                    listing_title, listing_url, sale_date, created_at,
-                   search_language, psa_grade
+                   search_language, psa_grade, variant
             FROM card_prices
-            WHERE set_id = ? AND card_number = ?
+            WHERE set_id = ? AND card_number = ?{_v_filter}
             ORDER BY COALESCE(sale_date, created_at) DESC
             LIMIT 2000
-        """, (set_id, card_number))
+            """, (set_id, card_number) + _v_params)
         rows = await cursor.fetchall()
         all_prices = [dict(row) for row in rows]
 
@@ -2500,6 +2509,7 @@ async def get_card_prices(set_id: str, card_number: str):
             "set_id": set_id,
             "card_number": card_number,
             "card_language": card_lang,
+            "variant": variant,
             "card": card_meta,
             "prices": prices,
             "stats": stats,
