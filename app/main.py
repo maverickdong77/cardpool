@@ -1120,6 +1120,23 @@ async def get_snkr_hot(limit: int = 10):
             (latest_batch["batch_id"], effective_limit),
         )).fetchall()
 
+        # 找「昨天 batch」：今天 fetched_at 往前至少 12 小時的最近一批（batch interval 不規律、放寬抓最新可用基準）
+        yesterday_batch_row = await (await db.execute(
+            """SELECT batch_id, MAX(fetched_at) AS yfa FROM snkr_hot_items
+               WHERE julianday(?) - julianday(fetched_at) >= 0.5
+               GROUP BY batch_id ORDER BY MAX(fetched_at) DESC LIMIT 1""",
+            (latest_batch["fetched_at"],),
+        )).fetchone()
+        yesterday_prices = {}
+        yesterday_fetched_at = None
+        if yesterday_batch_row:
+            yesterday_fetched_at = yesterday_batch_row["yfa"]
+            yrows = await (await db.execute(
+                "SELECT apparel_id, price_jpy FROM snkr_hot_items WHERE batch_id=?",
+                (yesterday_batch_row["batch_id"],),
+            )).fetchall()
+            yesterday_prices = {yr["apparel_id"]: yr["price_jpy"] for yr in yrows}
+
         items_out = []
         for r in rows:
             d = dict(r)
@@ -1128,11 +1145,18 @@ async def get_snkr_hot(limit: int = 10):
             except Exception as e:
                 d["title_zh"] = None
                 print(f"[snkr_hot] zh build err apparel={d.get('apparel_id')}: {e}")
+            yp = yesterday_prices.get(d["apparel_id"])
+            d["price_jpy_yesterday"] = yp
+            if yp and d["price_jpy"]:
+                d["price_change_pct"] = round((d["price_jpy"] - yp) / yp * 100, 1)
+            else:
+                d["price_change_pct"] = None
             items_out.append(d)
 
     return {
         "items": items_out,
         "fetched_at": latest_batch["fetched_at"],
+        "yesterday_fetched_at": yesterday_fetched_at,
         "source": "snkr_hottest",
         "disclaimer": "資料整理自 SNKR 公開 API",
     }
