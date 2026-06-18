@@ -3697,13 +3697,16 @@ async def auth_reset_password(payload: dict = Body(...)):
 
 
 @app.post("/api/auth/login")
-async def auth_login(payload: dict = Body(...)):
+async def auth_login(payload: dict = Body(...), request: Request = None):
     email = payload.get("email", "")
     password = payload.get("password", "")
     user = await auth_mod.authenticate(email, password)
     if not user:
         raise HTTPException(status_code=401, detail="email 或密碼錯誤")
     token = await auth_mod.create_session(user["id"])
+    ip = request.client.host if request and request.client else None
+    ua = request.headers.get("user-agent") if request else None
+    asyncio.create_task(auth_mod.log_login(user["id"], "password", ip, ua))
     return {"user": user, "token": token}
 
 
@@ -3717,6 +3720,93 @@ async def auth_logout(authorization: str = Header(None)):
 @app.get("/api/auth/me")
 async def auth_me(user: dict = Depends(auth_mod.get_current_user)):
     return {"user": user}
+
+
+# ==================== Google OAuth2 ====================
+
+@app.get("/api/auth/google")
+async def auth_google(request: Request, redirect_uri: str = "", frontend_redirect: str = ""):
+    """Step 1: 產生 Google OAuth 授權 URL，重定向到 Google 登入頁。
+
+    redirect_uri     — OAuth callback URL（必須與 Google Console 白名單一致）
+    frontend_redirect — 登入成功後要帶 token 回去的前端 URL（存在 state 裡）
+    """
+    if not auth_mod.GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=503, detail="Google OAuth 未設定（缺 GOOGLE_CLIENT_ID）")
+
+    import secrets as _sec
+    from urllib.parse import quote
+    state_token = _sec.token_urlsafe(16)
+
+    # 把 state + frontend_redirect 一起打包（用 | 分隔）
+    state_payload = f"{state_token}|{frontend_redirect}"
+
+    # 預設 callback URL：本站 /api/auth/google/callback
+    if not redirect_uri:
+        base = os.getenv("API_PUBLIC_BASE", str(request.base_url).rstrip("/"))
+        redirect_uri = f"{base}/api/auth/google/callback"
+
+    # 暫存 state → redirect_uri（記憶體，60 秒有效）
+    import time as _time
+    auth_mod._oauth_states[state_token] = {
+        "redirect_uri": redirect_uri,
+        "frontend_redirect": frontend_redirect,
+        "expires": _time.time() + 120,
+    }
+
+    google_url = auth_mod.build_google_auth_url(redirect_uri, state_payload)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(google_url)
+
+
+@app.get("/api/auth/google/callback")
+async def auth_google_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """Step 2: Google 回調。換 token、找/建用戶、建 session、帶 token 重定向回前端。"""
+    from fastapi.responses import RedirectResponse, HTMLResponse
+    import time as _time
+
+    if error:
+        return HTMLResponse(f"<p>Google 登入失敗：{error}</p>", status_code=400)
+
+    # 解析 state
+    parts = state.split("|", 1)
+    state_token = parts[0]
+    frontend_redirect = parts[1] if len(parts) > 1 else ""
+
+    stored = auth_mod._oauth_states.pop(state_token, None)
+    if not stored or stored["expires"] < _time.time():
+        raise HTTPException(status_code=400, detail="OAuth state 無效或過期，請重新登入")
+
+    redirect_uri = stored["redirect_uri"]
+
+    google_info = await auth_mod.exchange_google_code(code, redirect_uri)
+    if not google_info:
+        raise HTTPException(status_code=400, detail="無法取得 Google 帳號資訊")
+
+    user = await auth_mod.get_or_create_google_user(google_info)
+    token = await auth_mod.create_session(user["id"])
+
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent")
+    asyncio.create_task(auth_mod.log_login(user["id"], "google", ip, ua))
+
+    # 帶 token 重定向到前端（URL fragment，不落 server log）
+    dest = frontend_redirect or os.getenv("FRONTEND_BASE_URL", "/")
+    sep = "#" if "#" not in dest else "&"
+    return RedirectResponse(f"{dest}{sep}token={token}")
+
+
+@app.get("/api/auth/login-logs")
+async def my_login_logs(user: dict = Depends(auth_mod.get_current_user)):
+    """用戶自己的登入紀錄（最近 20 筆）。"""
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT method, ip, user_agent, created_at FROM login_logs WHERE user_id=? ORDER BY created_at DESC LIMIT 20",
+            (user["id"],),
+        )).fetchall()
+    return {"logs": [dict(r) for r in rows]}
 
 
 @app.get("/api/orderbook/{set_id}/{card_number}")

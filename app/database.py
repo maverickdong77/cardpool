@@ -146,6 +146,9 @@ def init_db():
         ("phone", "TEXT"),
         ("phone_verified", "INTEGER DEFAULT 0"),
         ("role", "TEXT NOT NULL DEFAULT 'user'"),
+        ("google_id", "TEXT"),
+        ("oauth_provider", "TEXT"),    # 'google' | NULL（密碼登入）
+        ("avatar_url", "TEXT"),        # Google 頭像
     ]:
         try:
             cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
@@ -153,6 +156,21 @@ def init_db():
             pass  # 已存在
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id)")
+
+    # ========== 登入紀錄表 ==========
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS login_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            method TEXT NOT NULL DEFAULT 'password',  -- 'password' | 'google'
+            ip TEXT,
+            user_agent TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_login_logs_user ON login_logs(user_id, created_at DESC)")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sessions (

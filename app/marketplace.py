@@ -222,7 +222,34 @@ async def create_listing(user_id: int, payload: dict) -> dict:
     out = await get_listing(listing_id)
     if trade:
         out["matched_trade"] = trade
+
+    # 寄上架成功 email（非同步，不阻塞回傳）
+    import asyncio as _asyncio
+    _asyncio.create_task(_email_listing_confirmed(user_id, out))
+
     return out
+
+
+async def _email_listing_confirmed(user_id: int, listing: dict) -> None:
+    """上架成功後非同步寄信給賣家。"""
+    from app.email_sender import send_listing_confirmed
+    import aiosqlite as _aio
+    async with _aio.connect(DB_PATH) as db:
+        row = await (await db.execute("SELECT email FROM users WHERE id=?", (user_id,))).fetchone()
+    if not row or not row[0]:
+        return
+    try:
+        send_listing_confirmed(
+            to_email=row[0],
+            set_id=listing.get("set_id", ""),
+            card_number=listing.get("card_number", ""),
+            grade=listing.get("grade", 0),
+            ask_price_twd=listing.get("ask_price_twd", 0),
+            condition=listing.get("condition"),
+            listing_id=listing.get("id"),
+        )
+    except Exception as e:
+        print(f"[email] listing_confirmed err: {e}")
 
 
 async def cancel_listing(user_id: int, listing_id: int) -> dict:
@@ -454,16 +481,18 @@ async def _create_trade(listing, bid, price: float) -> dict:
 
 
 async def _notify_admin_new_trade(trade: dict, listing: dict, bid: dict) -> None:
-    """成交後推播通知後台管理員：LINE push + 寫 admin in-app notification。"""
+    """成交後：LINE push + in-app notification + 3 封 email（買家/賣家/管理員）。"""
     import httpx
     import aiosqlite as _aio
+    from app import email_sender as _es
 
     trade_id = trade.get("id")
     set_id = trade.get("set_id", "")
     card_number = trade.get("card_number", "")
     price = trade.get("price_twd", 0)
+    fee = trade.get("fee_twd", 0)
     grade = trade.get("grade")
-    add_case = trade.get("add_protective_case", 0)
+    add_case = bool(trade.get("add_protective_case", 0))
     buyer_id = trade.get("buyer_id")
     seller_id = trade.get("seller_id")
     condition = listing.get("condition") or ""
@@ -491,6 +520,49 @@ async def _notify_admin_new_trade(trade: dict, listing: dict, bid: dict) -> None
             await db.commit()
     except Exception as e:
         print(f"[admin_notify] DB write err: {e}")
+
+    # 拉買家 / 賣家 email
+    buyer_email = seller_email = None
+    try:
+        async with _aio.connect(DB_PATH) as db:
+            brow = await (await db.execute("SELECT email FROM users WHERE id=?", (buyer_id,))).fetchone()
+            srow = await (await db.execute("SELECT email FROM users WHERE id=?", (seller_id,))).fetchone()
+        buyer_email = brow[0] if brow else None
+        seller_email = srow[0] if srow else None
+    except Exception as e:
+        print(f"[admin_notify] fetch emails err: {e}")
+
+    # Email：買家成交通知
+    if buyer_email:
+        try:
+            _es.send_trade_matched_buyer(
+                to_email=buyer_email,
+                set_id=set_id, card_number=card_number, grade=grade,
+                price_twd=price, add_protective_case=add_case, trade_id=trade_id,
+            )
+        except Exception as e:
+            print(f"[email] buyer trade err: {e}")
+
+    # Email：賣家成交通知
+    if seller_email:
+        try:
+            _es.send_trade_matched_seller(
+                to_email=seller_email,
+                set_id=set_id, card_number=card_number, grade=grade,
+                price_twd=price, fee_twd=fee, condition=condition or None, trade_id=trade_id,
+            )
+        except Exception as e:
+            print(f"[email] seller trade err: {e}")
+
+    # Email：管理員新訂單
+    try:
+        _es.send_admin_new_order(
+            set_id=set_id, card_number=card_number, grade=grade,
+            price_twd=price, buyer_id=buyer_id, seller_id=seller_id,
+            add_protective_case=add_case, condition=condition or None, trade_id=trade_id,
+        )
+    except Exception as e:
+        print(f"[email] admin order err: {e}")
 
     # LINE Push 給管理員
     line_token = _os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")

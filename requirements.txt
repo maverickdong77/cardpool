@@ -9,3 +9,5 @@ aiosqlite
 apscheduler
 playwright
 psutil
+sendgrid
+python-multipart

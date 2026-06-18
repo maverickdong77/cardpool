@@ -197,3 +197,134 @@ def require_role(*allowed_roles: str):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="權限不足")
         return u
     return _checker
+
+
+# ====================== Login Log ======================
+
+async def log_login(user_id: int, method: str, ip: Optional[str] = None,
+                    user_agent: Optional[str] = None) -> None:
+    """記錄登入事件（fire-and-forget）。"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO login_logs (user_id, method, ip, user_agent) VALUES (?, ?, ?, ?)",
+            (user_id, method, ip, user_agent),
+        )
+        await db.commit()
+
+
+# ====================== Google OAuth2 ======================
+
+import os as _os
+
+GOOGLE_CLIENT_ID = _os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = _os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+# CSRF state 暫存（記憶體即可，30 秒有效）
+_oauth_states: dict[str, float] = {}
+
+
+def build_google_auth_url(redirect_uri: str, state: str) -> str:
+    from urllib.parse import urlencode
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "select_account",
+        "state": state,
+    }
+    return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
+
+
+async def exchange_google_code(code: str, redirect_uri: str) -> Optional[dict]:
+    """用 code 換 token，再拿 userinfo。失敗回 None。"""
+    import httpx
+    async with httpx.AsyncClient(timeout=15) as client:
+        token_resp = await client.post(GOOGLE_TOKEN_URL, data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        })
+        if token_resp.status_code != 200:
+            print(f"[Google OAuth] token exchange fail: {token_resp.text}")
+            return None
+        tokens = token_resp.json()
+        access_token = tokens.get("access_token")
+        if not access_token:
+            return None
+        info_resp = await client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if info_resp.status_code != 200:
+            return None
+        return info_resp.json()
+
+
+async def get_or_create_google_user(google_info: dict) -> dict:
+    """從 Google userinfo 找或建立本站 user，回 user dict。"""
+    google_id = google_info.get("sub", "")
+    email = (google_info.get("email") or "").lower().strip()
+    display_name = google_info.get("name") or email.split("@")[0]
+    avatar_url = google_info.get("picture") or None
+
+    if not google_id or not email:
+        raise HTTPException(status_code=400, detail="Google 帳號缺少必要資訊")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # 1) 先用 google_id 找
+        row = await (await db.execute(
+            "SELECT id FROM users WHERE google_id=?", (google_id,)
+        )).fetchone()
+        if row:
+            uid = row["id"]
+            # 更新頭像（若有變）
+            await db.execute(
+                "UPDATE users SET avatar_url=? WHERE id=?", (avatar_url, uid)
+            )
+            await db.commit()
+            return await get_user_by_id(uid)
+
+        # 2) 用 email 找（密碼帳號合併）
+        row = await (await db.execute(
+            "SELECT id FROM users WHERE email=?", (email,)
+        )).fetchone()
+        if row:
+            uid = row["id"]
+            await db.execute(
+                "UPDATE users SET google_id=?, oauth_provider='google', avatar_url=? WHERE id=?",
+                (google_id, avatar_url, uid),
+            )
+            await db.commit()
+            return await get_user_by_id(uid)
+
+        # 3) 全新用戶 — password_hash 留空字串（不能用密碼登入，只能 Google）
+        cur = await db.execute(
+            """INSERT INTO users
+               (email, display_name, password_hash, google_id, oauth_provider, avatar_url)
+               VALUES (?, ?, '', ?, 'google', ?)""",
+            (email, display_name, google_id, avatar_url),
+        )
+        await db.commit()
+        return await get_user_by_id(cur.lastrowid)
+
+
+async def get_user_by_id(user_id: int) -> Optional[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT id, email, display_name, line_user_id, phone, phone_verified,
+                      role, oauth_provider, avatar_url, created_at
+               FROM users WHERE id=?""",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
