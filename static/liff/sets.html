@@ -147,14 +147,12 @@
                 let sets = [];
 
                 if (lang === 'jp' || lang === 'en') {
-                    // 日 / 英都使用 categories API（讀本地 DB，含 logo_url + name_zh）
-                    const response = await fetch(`${API_BASE}/api/cardlist/categories?language=${lang}`, {
+                    // 使用靜態卡表（本地 demo 無 jp_card_list_set DB）
+                    const response = await fetch(`${API_BASE}/api/sets/${lang}`, {
                         headers: { 'ngrok-skip-browser-warning': '1' }
                     });
                     const data = await response.json();
-                    for (const cat of (data.categories || [])) {
-                        sets = sets.concat(cat.sets || []);
-                    }
+                    sets = data.sets || [];
                 } else {
                     // 中文等其他：原本的 API
                     const response = await fetch(`${API_BASE}/api/sets/${lang}`, {

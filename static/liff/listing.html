@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cardpool | 賣家上架</title>
+    <link rel="stylesheet" href="/static/liff/style.css">
+    <style>
+        .page-header { background:linear-gradient(135deg,#FFD700 0%,#FFA500 100%); padding:20px; display:flex; align-items:center; gap:12px; }
+        .back-btn { background:rgba(0,0,0,.1); border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:.85rem; color:#333; font-weight:600; text-decoration:none; }
+        .page-header h1 { font-size:1.2rem; font-weight:700; color:#1a1a1a; }
+
+        .section { margin:16px; background:#fff; border-radius:16px; box-shadow:0 2px 12px rgba(0,0,0,.07); overflow:hidden; }
+        .section-title { padding:14px 16px; border-bottom:1px solid #f0f0f0; font-size:.9rem; font-weight:700; color:#555; background:#fafafa; }
+
+        .card-preview { padding:16px; display:flex; align-items:center; gap:14px; }
+        .card-img-placeholder { width:60px; height:84px; background:#f5f5f5; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:1.8rem; flex-shrink:0; }
+        .card-meta h3 { font-size:1rem; font-weight:700; }
+        .card-meta p { font-size:.8rem; color:#888; margin-top:3px; }
+
+        .search-row { padding:12px 16px; display:flex; gap:8px; border-bottom:1px solid #f0f0f0; }
+        .search-row input { flex:1; padding:9px 12px; border:1.5px solid #eee; border-radius:8px; font-size:.9rem; outline:none; }
+        .search-row input:focus { border-color:#FFD700; }
+        .search-row button { padding:9px 16px; background:#FFD700; border:none; border-radius:8px; font-weight:700; font-size:.85rem; cursor:pointer; white-space:nowrap; }
+
+        .form-body { padding:16px; display:flex; flex-direction:column; gap:14px; }
+        .field-group label { display:block; font-size:.8rem; color:#666; margin-bottom:5px; font-weight:600; }
+        .field-group input,
+        .field-group select,
+        .field-group textarea { width:100%; padding:11px 14px; border:1.5px solid #eee; border-radius:10px; font-size:.95rem; outline:none; transition:border .2s; font-family:inherit; }
+        .field-group input:focus,
+        .field-group select:focus,
+        .field-group textarea:focus { border-color:#FFD700; }
+        .field-group textarea { resize:vertical; min-height:80px; }
+
+        .condition-tags { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+        .cond-tag { padding:7px 14px; border:1.5px solid #eee; border-radius:20px; font-size:.83rem; cursor:pointer; transition:all .2s; background:#fff; color:#555; }
+        .cond-tag.selected { border-color:#FFD700; background:#fffde7; color:#e65100; font-weight:700; }
+
+        .price-row { display:flex; align-items:center; gap:8px; }
+        .price-row input { flex:1; }
+        .price-row .currency { font-size:.9rem; color:#888; white-space:nowrap; }
+
+        .submit-btn { margin:0 16px 20px; padding:15px; background:#FFD700; border:none; border-radius:12px; font-size:1.05rem; font-weight:700; color:#1a1a1a; cursor:pointer; width:calc(100% - 32px); transition:opacity .2s; }
+        .submit-btn:hover { opacity:.85; }
+        .submit-btn:disabled { opacity:.5; cursor:not-allowed; }
+
+        .result-msg { margin:0 16px 16px; padding:14px; border-radius:10px; font-size:.9rem; display:none; }
+        .result-msg.ok { background:#e8f5e9; color:#2e7d32; display:block; }
+        .result-msg.err { background:#ffebee; color:#c62828; display:block; }
+
+        .auth-warn { margin:20px 16px; padding:16px; background:#fff3e0; border-radius:12px; text-align:center; }
+        .auth-warn p { font-size:.9rem; color:#e65100; margin-bottom:12px; }
+        .auth-warn a { display:inline-block; padding:10px 24px; background:#FFD700; border-radius:8px; font-weight:700; color:#1a1a1a; text-decoration:none; }
+
+        .info-badge { display:inline-flex; align-items:center; gap:4px; background:#e3f2fd; color:#1565c0; border-radius:6px; padding:4px 10px; font-size:.78rem; margin-top:4px; }
+
+        .search-results { max-height:200px; overflow-y:auto; }
+        .search-result-item { padding:12px 16px; border-bottom:1px solid #f0f0f0; cursor:pointer; transition:background .15s; }
+        .search-result-item:hover { background:#fffde7; }
+        .search-result-item .name { font-size:.9rem; font-weight:600; }
+        .search-result-item .sub { font-size:.78rem; color:#888; }
+    </style>
+</head>
+<body>
+<div class="app">
+    <div class="page-header">
+        <a href="/" class="back-btn">← 首頁</a>
+        <h1>賣家上架</h1>
+    </div>
+
+    <!-- 未登入警告 -->
+    <div id="authWarn" class="auth-warn" style="display:none;">
+        <p>⚠️ 請先登入才能上架</p>
+        <a href="/">前往登入</a>
+    </div>
+
+    <!-- 主內容 -->
+    <div id="mainContent">
+
+        <!-- 選卡 -->
+        <div class="section">
+            <div class="section-title">🃏 選擇卡片</div>
+            <div class="search-row">
+                <input type="text" id="cardSearch" placeholder="輸入卡片名稱搜尋（如 Charizard）" autocomplete="off">
+                <button onclick="searchCard()">搜尋</button>
+            </div>
+            <div id="searchResults" class="search-results"></div>
+            <div class="card-preview" id="cardPreview">
+                <div class="card-img-placeholder">🃏</div>
+                <div class="card-meta">
+                    <h3 id="selectedCardName">— 尚未選擇 —</h3>
+                    <p id="selectedCardSub">搜尋並選擇要上架的卡片</p>
+                    <span class="info-badge">💡 本機 Demo 預載：Charizard ex SAR (jp-sv8 #1)</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 上架表單 -->
+        <div class="section">
+            <div class="section-title">📋 上架資訊</div>
+            <div class="form-body">
+                <div class="field-group">
+                    <label>鑑定等級 (Grade)</label>
+                    <select id="grade">
+                        <option value="raw">Raw（未鑑定）</option>
+                        <option value="10">PSA 10 — Gem Mint</option>
+                        <option value="9">PSA 9 — Mint</option>
+                        <option value="8">PSA 8 — NM-MT</option>
+                        <option value="7">PSA 7 — NM</option>
+                        <option value="6">PSA 6 — EX-MT</option>
+                        <option value="5">PSA 5 — EX</option>
+                    </select>
+                </div>
+
+                <div class="field-group" id="psaField" style="display:none;">
+                    <label>PSA 鑑定編號（Grade 9/10 必填）</label>
+                    <input type="text" id="psaCert" placeholder="例如：12345678">
+                </div>
+
+                <div class="field-group">
+                    <label>卡片狀況 (Condition)</label>
+                    <div class="condition-tags">
+                        <div class="cond-tag" onclick="selectCondition(this,'mint')">全新未拆<br><small>Mint</small></div>
+                        <div class="cond-tag" onclick="selectCondition(this,'near_mint')">近全新<br><small>Near Mint</small></div>
+                        <div class="cond-tag" onclick="selectCondition(this,'excellent')">優良<br><small>Excellent</small></div>
+                        <div class="cond-tag" onclick="selectCondition(this,'good')">良好<br><small>Good</small></div>
+                        <div class="cond-tag" onclick="selectCondition(this,'poor')">普通<br><small>Poor</small></div>
+                    </div>
+                </div>
+
+                <div class="field-group">
+                    <label>定價（新台幣 TWD）</label>
+                    <div class="price-row">
+                        <input type="number" id="askPrice" placeholder="例如：2500" min="1" max="10000000">
+                        <span class="currency">NT$</span>
+                    </div>
+                </div>
+
+                <div class="field-group">
+                    <label>賣家備註（選填，最多 500 字）</label>
+                    <textarea id="description" placeholder="卡片詳細說明、交易方式、運費說明等…" maxlength="500"></textarea>
+                </div>
+            </div>
+        </div>
+
+        <div id="resultMsg" class="result-msg"></div>
+        <button class="submit-btn" onclick="submitListing()">📤 確認上架</button>
+    </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let selectedCard = null;
+let selectedCondition = null;
+
+function getToken() { return localStorage.getItem('cp_token'); }
+
+function selectCondition(el, val) {
+    document.querySelectorAll('.cond-tag').forEach(t => t.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedCondition = val;
+}
+
+document.getElementById('grade').addEventListener('change', function() {
+    const v = this.value;
+    document.getElementById('psaField').style.display = (v === '9' || v === '10') ? '' : 'none';
+});
+
+async function searchCard() {
+    const q = document.getElementById('cardSearch').value.trim();
+    if (!q) return;
+    const res = document.getElementById('searchResults');
+    res.innerHTML = '<div style="padding:12px 16px;color:#888;font-size:.85rem;">搜尋中...</div>';
+
+    try {
+        const r = await fetch(`${API}/api/cardlist/search?q=${encodeURIComponent(q)}&limit=20`);
+        if (!r.ok) throw new Error('搜尋失敗');
+        const d = await r.json();
+        const cards = d.cards || [];
+        if (!cards.length) {
+            res.innerHTML = '<div style="padding:12px 16px;color:#888;font-size:.85rem;">找不到結果</div>';
+            return;
+        }
+        res.innerHTML = '';
+        cards.forEach(c => {
+            const item = document.createElement('div');
+            item.className = 'search-result-item';
+            item.innerHTML = `<div class="name">${c.name || c.name_jp || c.card_number}</div><div class="sub">${c.set_id} #${c.card_number}</div>`;
+            item.onclick = () => {
+                selectedCard = c;
+                document.getElementById('selectedCardName').textContent = c.name || c.name_jp || c.card_number;
+                document.getElementById('selectedCardSub').textContent = `${c.set_id} · 卡號 #${c.card_number}`;
+                res.innerHTML = '';
+                document.getElementById('cardSearch').value = '';
+            };
+            res.appendChild(item);
+        });
+    } catch(e) {
+        res.innerHTML = '<div style="padding:12px 16px;color:#c62828;font-size:.85rem;">搜尋失敗，使用 Demo 卡</div>';
+    }
+}
+
+document.getElementById('cardSearch').addEventListener('keydown', e => { if(e.key==='Enter') searchCard(); });
+
+async function submitListing() {
+    const token = getToken();
+    if (!token) { window.location.href = '/'; return; }
+
+    // 如果沒選卡，使用 Demo 卡
+    const card = selectedCard || { set_id: 'jp-sv8', card_number: '1', name: 'Charizard ex SAR' };
+
+    const gradeVal = document.getElementById('grade').value;
+    const grade = gradeVal === 'raw' ? 0 : parseInt(gradeVal);
+    const askPrice = parseFloat(document.getElementById('askPrice').value);
+    const description = document.getElementById('description').value.trim();
+    const psaCert = document.getElementById('psaCert').value.trim();
+
+    if (!askPrice || askPrice <= 0) return showResult('請填寫有效定價', 'err');
+    if (!selectedCondition) return showResult('請選擇卡片狀況', 'err');
+    if ((grade === 9 || grade === 10) && !psaCert) return showResult('PSA 9/10 需填鑑定編號', 'err');
+
+    const btn = document.querySelector('.submit-btn');
+    btn.disabled = true;
+    btn.textContent = '上架中...';
+
+    const payload = {
+        set_id: card.set_id,
+        card_number: card.card_number,
+        grade,
+        ask_price_twd: askPrice,
+        condition: selectedCondition,
+        description: description || null,
+        psa_cert_number: psaCert || null,
+    };
+
+    try {
+        const r = await fetch(`${API}/api/listings`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify(payload)
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            showResult(d.detail || '上架失敗', 'err');
+        } else {
+            showResult(`✅ 上架成功！掛單 #${d.listing_id || d.id || '?'}  ${card.name} · NT$${askPrice.toLocaleString()}`, 'ok');
+            // Reset form
+            document.getElementById('askPrice').value = '';
+            document.getElementById('description').value = '';
+            document.querySelectorAll('.cond-tag').forEach(t=>t.classList.remove('selected'));
+            selectedCondition = null;
+        }
+    } catch(e) {
+        showResult('網路錯誤：' + e.message, 'err');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '📤 確認上架';
+    }
+}
+
+function showResult(msg, type) {
+    const el = document.getElementById('resultMsg');
+    el.className = 'result-msg ' + type;
+    el.textContent = msg;
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// Auth check on load
+async function init() {
+    const token = getToken();
+    if (!token) {
+        document.getElementById('authWarn').style.display = '';
+        document.getElementById('mainContent').style.display = 'none';
+        return;
+    }
+    try {
+        const r = await fetch(`${API}/api/auth/me`, { headers: { 'Authorization': 'Bearer ' + token } });
+        if (!r.ok) {
+            localStorage.removeItem('cp_token');
+            document.getElementById('authWarn').style.display = '';
+            document.getElementById('mainContent').style.display = 'none';
+        }
+    } catch(e) {}
+}
+
+init();
+</script>
+</body>
+</html>
