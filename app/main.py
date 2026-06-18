@@ -3785,6 +3785,56 @@ async def api_my_trades(user: dict = Depends(auth_mod.get_current_user)):
     return {"trades": await mp.my_trades(user["id"])}
 
 
+# ==================== 上架輔助資訊 ====================
+
+@app.get("/api/marketplace/conditions")
+async def api_listing_conditions():
+    """回傳賣家可選的品相列表（raw 卡用）及保護殼加購單價。"""
+    return {
+        "conditions": [
+            {"value": k, "label_zh": v}
+            for k, v in mp.CONDITIONS_ZH.items()
+        ],
+        "protective_case_price_twd": mp.PROTECTIVE_CASE_PRICE_TWD,
+    }
+
+
+# ==================== 後台管理通知 ====================
+
+@app.get("/api/admin/notifications")
+async def admin_notifications(
+    unread_only: bool = False,
+    user: dict = Depends(auth_mod.require_role("staff")),
+):
+    """後台管理員專用：拉 user_id=0 的系統通知（含新訂單成交通知）。"""
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM notifications WHERE user_id=0"
+        if unread_only:
+            sql += " AND read_at IS NULL"
+        sql += " ORDER BY created_at DESC LIMIT 100"
+        rows = await (await db.execute(sql)).fetchall()
+        unread = sum(1 for r in rows if not r["read_at"])
+    return {"items": [dict(r) for r in rows], "unread_count": unread}
+
+
+@app.patch("/api/admin/notifications/{notif_id}/read")
+async def admin_mark_notification_read(
+    notif_id: int,
+    user: dict = Depends(auth_mod.require_role("staff")),
+):
+    """後台標記通知已讀。"""
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=0",
+            (notif_id,),
+        )
+        await db.commit()
+    return {"ok": True}
+
+
 # ==================== 評價系統 + 等級 + 徽章 ====================
 
 def _compute_user_level(trade_count: int) -> dict:

@@ -20,6 +20,22 @@ from app.database import DB_PATH
 DEFAULT_EXPIRES_DAYS = 30
 GRADES_ALLOWED = (10, 9, 0)  # 0 = Raw 未鑑定
 
+# 品相選項（參考 SNKR Dunk，主要用於 Raw 卡 grade=0）
+CONDITIONS_ALLOWED = ("mint", "near_mint", "excellent", "good", "poor")
+CONDITIONS_ZH = {
+    "mint": "全新未拆",
+    "near_mint": "近全新",
+    "excellent": "優良",
+    "good": "良好",
+    "poor": "普通",
+}
+
+PROTECTIVE_CASE_PRICE_TWD = 50  # 保護殼加購費（新台幣）
+
+# 管理員 LINE User ID（環境變數 ADMIN_LINE_USER_ID，未設定則不推送）
+import os as _os
+ADMIN_LINE_USER_ID = _os.environ.get("ADMIN_LINE_USER_ID", "")
+
 
 def _validate_grade(grade: int) -> int:
     try:
@@ -176,6 +192,8 @@ async def create_listing(user_id: int, payload: dict) -> dict:
     grade = _validate_grade(payload.get("grade"))
     ask_price = _validate_price(payload.get("ask_price_twd"))
     psa_cert = (payload.get("psa_cert_number") or "").strip() or None
+    condition = (payload.get("condition") or "").strip().lower() or None
+    description = (payload.get("description") or "").strip()[:500] or None
 
     if not set_id or not card_number:
         raise HTTPException(status_code=400, detail="set_id / card_number 必填")
@@ -183,14 +201,18 @@ async def create_listing(user_id: int, payload: dict) -> dict:
         raise HTTPException(status_code=404, detail="找不到此卡片")
     if grade in (10, 9) and not psa_cert:
         raise HTTPException(status_code=400, detail="PSA 鑑定卡需填入鑑定編號")
+    if condition and condition not in CONDITIONS_ALLOWED:
+        raise HTTPException(status_code=400, detail=f"condition 須為 {'/'.join(CONDITIONS_ALLOWED)}")
 
     expires_at = (datetime.utcnow() + timedelta(days=DEFAULT_EXPIRES_DAYS)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """INSERT INTO listings
-               (user_id, set_id, card_number, grade, psa_cert_number, ask_price_twd, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, set_id, card_number, grade, psa_cert, ask_price, expires_at),
+               (user_id, set_id, card_number, grade, psa_cert_number, ask_price_twd,
+                condition, description, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, set_id, card_number, grade, psa_cert, ask_price,
+             condition, description, expires_at),
         )
         await db.commit()
         listing_id = cur.lastrowid
@@ -241,6 +263,8 @@ async def create_bid(user_id: int, payload: dict) -> dict:
     card_number = (payload.get("card_number") or "").strip()
     grade = _validate_grade(payload.get("grade"))
     bid_price = _validate_price(payload.get("bid_price_twd"))
+    add_case = 1 if payload.get("add_protective_case") else 0
+    case_price = PROTECTIVE_CASE_PRICE_TWD if add_case else 0
 
     if not set_id or not card_number:
         raise HTTPException(status_code=400, detail="set_id / card_number 必填")
@@ -251,9 +275,11 @@ async def create_bid(user_id: int, payload: dict) -> dict:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """INSERT INTO bids
-               (user_id, set_id, card_number, grade, bid_price_twd, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (user_id, set_id, card_number, grade, bid_price, expires_at),
+               (user_id, set_id, card_number, grade, bid_price_twd,
+                add_protective_case, protective_case_price_twd, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, set_id, card_number, grade, bid_price,
+             add_case, case_price, expires_at),
         )
         await db.commit()
         bid_id = cur.lastrowid
@@ -388,15 +414,20 @@ async def _match_after_bid(bid_id: int) -> Optional[dict]:
 
 
 async def _create_trade(listing, bid, price: float) -> dict:
-    """產生 trade 並更新 listing/bid 狀態。"""
+    """產生 trade 並更新 listing/bid 狀態。成交後非同步通知管理員。"""
+    add_case = bid.get("add_protective_case") or 0
+    case_price = bid.get("protective_case_price_twd") or 0
+
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """INSERT INTO trades
-               (listing_id, bid_id, buyer_id, seller_id, set_id, card_number, grade, price_twd, fee_twd)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (listing_id, bid_id, buyer_id, seller_id, set_id, card_number, grade,
+                price_twd, fee_twd, add_protective_case, protective_case_price_twd)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (listing["id"], bid["id"], bid["user_id"], listing["user_id"],
              listing["set_id"], listing["card_number"], listing["grade"],
-             price, round(price * 0.05, 0)),  # 5% 平台費（賣家側預扣）
+             price, round(price * 0.05, 0),  # 5% 平台費（賣家側預扣）
+             add_case, case_price),
         )
         trade_id = cur.lastrowid
         await db.execute(
@@ -412,7 +443,73 @@ async def _create_trade(listing, bid, price: float) -> dict:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM trades WHERE id=?", (trade_id,))
         row = await cur.fetchone()
-    return dict(row) if row else {}
+
+    trade = dict(row) if row else {}
+
+    # 非同步通知管理員（不阻塞回傳）
+    import asyncio as _asyncio
+    _asyncio.create_task(_notify_admin_new_trade(trade, listing, bid))
+
+    return trade
+
+
+async def _notify_admin_new_trade(trade: dict, listing: dict, bid: dict) -> None:
+    """成交後推播通知後台管理員：LINE push + 寫 admin in-app notification。"""
+    import httpx
+    import aiosqlite as _aio
+
+    trade_id = trade.get("id")
+    set_id = trade.get("set_id", "")
+    card_number = trade.get("card_number", "")
+    price = trade.get("price_twd", 0)
+    grade = trade.get("grade")
+    add_case = trade.get("add_protective_case", 0)
+    buyer_id = trade.get("buyer_id")
+    seller_id = trade.get("seller_id")
+    condition = listing.get("condition") or ""
+
+    grade_label = {10: "PSA 10", 9: "PSA 9", 0: "Raw"}.get(grade, str(grade))
+    case_note = "（含保護殼 +NT$50）" if add_case else ""
+    cond_note = f"  品相：{CONDITIONS_ZH.get(condition, condition)}" if condition else ""
+
+    title = "🛒 新訂單成交通知"
+    body = (
+        f"Trade #{trade_id}  {set_id} #{card_number}  {grade_label}{cond_note}\n"
+        f"成交價：NT${price:,.0f}{case_note}\n"
+        f"賣家 ID：{seller_id}  買家 ID：{buyer_id}"
+    )
+    link_url = f"#/admin/trades/{trade_id}"
+
+    # 寫 admin in-app notification（user_id=0 表示後台）
+    try:
+        async with _aio.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO notifications (user_id, kind, title, body, link_url, channel, line_pushed)
+                   VALUES (0, 'new_trade', ?, ?, ?, 'inapp', 0)""",
+                (title, body, link_url),
+            )
+            await db.commit()
+    except Exception as e:
+        print(f"[admin_notify] DB write err: {e}")
+
+    # LINE Push 給管理員
+    line_token = _os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+    if ADMIN_LINE_USER_ID and line_token:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(
+                    "https://api.line.me/v2/bot/message/push",
+                    headers={
+                        "Authorization": f"Bearer {line_token}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "to": ADMIN_LINE_USER_ID,
+                        "messages": [{"type": "text", "text": f"{title}\n\n{body}"}],
+                    },
+                )
+        except Exception as e:
+            print(f"[admin_notify] LINE push err: {e}")
 
 
 # ============================================================

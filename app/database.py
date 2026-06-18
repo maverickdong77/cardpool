@@ -388,6 +388,28 @@ def init_db():
             cursor.execute(f"ALTER TABLE snkr_hot_items ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
             pass
+
+    # ========== 賣家上架改善（feature/seller-listing-improvements）==========
+    # listings: condition = 賣家自定義品相（raw 卡用）、description = 賣家備注
+    for col, typ in [("condition", "TEXT"), ("description", "TEXT")]:
+        try:
+            cursor.execute(f"ALTER TABLE listings ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass
+
+    # bids: add_protective_case = 買家加購保護殼選項
+    for col, typ in [("add_protective_case", "INTEGER DEFAULT 0"), ("protective_case_price_twd", "REAL DEFAULT 0")]:
+        try:
+            cursor.execute(f"ALTER TABLE bids ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass
+
+    # trades: 記錄成交時的保護殼狀態
+    for col, typ in [("add_protective_case", "INTEGER DEFAULT 0"), ("protective_case_price_twd", "REAL DEFAULT 0")]:
+        try:
+            cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_snkr_hot_batch ON snkr_hot_items(batch_id, rank)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_snkr_hot_fetched ON snkr_hot_items(fetched_at DESC)")
 
