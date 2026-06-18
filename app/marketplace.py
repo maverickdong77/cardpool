@@ -442,6 +442,11 @@ async def _match_after_bid(bid_id: int) -> Optional[dict]:
 
 async def _create_trade(listing, bid, price: float) -> dict:
     """產生 trade 並更新 listing/bid 狀態。成交後非同步通知管理員。"""
+    # sqlite3.Row / aiosqlite.Row 轉成 dict，讓後面 .get() 正常用
+    if not isinstance(bid, dict):
+        bid = dict(bid)
+    if not isinstance(listing, dict):
+        listing = dict(listing)
     add_case = bid.get("add_protective_case") or 0
     case_price = bid.get("protective_case_price_twd") or 0
 
