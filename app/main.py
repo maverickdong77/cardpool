@@ -3809,6 +3809,155 @@ async def my_login_logs(user: dict = Depends(auth_mod.get_current_user)):
     return {"logs": [dict(r) for r in rows]}
 
 
+@app.patch("/api/auth/me")
+async def update_my_profile(
+    payload: dict = Body(...),
+    user: dict = Depends(auth_mod.get_current_user),
+):
+    """更新個人資料：display_name、新密碼（需舊密碼驗證）"""
+    import aiosqlite
+    updates = []
+    args = []
+
+    display_name = (payload.get("display_name") or "").strip()
+    if display_name:
+        updates.append("display_name=?")
+        args.append(display_name)
+
+    new_password = payload.get("new_password", "")
+    if new_password:
+        old_password = payload.get("old_password", "")
+        if len(new_password) < 6:
+            raise HTTPException(status_code=400, detail="新密碼至少 6 字元")
+        async with aiosqlite.connect(DB_PATH) as db:
+            row = await (await db.execute("SELECT password_hash FROM users WHERE id=?", (user["id"],))).fetchone()
+        if not row or not auth_mod.verify_password(old_password, row[0]):
+            raise HTTPException(status_code=400, detail="舊密碼錯誤")
+        updates.append("password_hash=?")
+        args.append(auth_mod.hash_password(new_password))
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="沒有可更新的欄位")
+
+    args.append(user["id"])
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE users SET {', '.join(updates)} WHERE id=?", args)
+        await db.commit()
+    return {"ok": True, "message": "個人資料已更新"}
+
+
+# ==================== 官方周邊商品 shop ====================
+
+@app.get("/api/shop/items")
+async def shop_list_items(active_only: bool = True):
+    """列出所有上架商品（公開）"""
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM shop_items"
+        if active_only:
+            sql += " WHERE is_active=1 AND stock>0"
+        sql += " ORDER BY id DESC"
+        rows = await (await db.execute(sql)).fetchall()
+    return {"items": [dict(r) for r in rows]}
+
+
+@app.post("/api/shop/items")
+async def shop_add_item(
+    payload: dict = Body(...),
+    user: dict = Depends(auth_mod.require_role("staff")),
+):
+    """新增商品（限 staff/admin）"""
+    import aiosqlite
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title 必填")
+    price = float(payload.get("price_twd", 0))
+    if price <= 0:
+        raise HTTPException(status_code=400, detail="price_twd 必填")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO shop_items (title, description, price_twd, image_url, stock, is_active, created_by) VALUES (?,?,?,?,?,1,?)",
+            (title, payload.get("description", ""), price, payload.get("image_url", ""),
+             int(payload.get("stock", 99)), user["id"]),
+        )
+        await db.commit()
+    return {"ok": True, "item_id": cur.lastrowid}
+
+
+@app.patch("/api/shop/items/{item_id}")
+async def shop_update_item(
+    item_id: int,
+    payload: dict = Body(...),
+    user: dict = Depends(auth_mod.require_role("staff")),
+):
+    """更新商品（限 staff/admin）"""
+    import aiosqlite
+    fields = []
+    args = []
+    for f in ("title", "description", "image_url"):
+        if f in payload and payload[f] is not None:
+            fields.append(f"{f}=?"); args.append(payload[f])
+    if "price_twd" in payload:
+        fields.append("price_twd=?"); args.append(float(payload["price_twd"]))
+    if "stock" in payload:
+        fields.append("stock=?"); args.append(int(payload["stock"]))
+    if "is_active" in payload:
+        fields.append("is_active=?"); args.append(1 if payload["is_active"] else 0)
+    if not fields:
+        raise HTTPException(status_code=400, detail="無可更新欄位")
+    args.append(item_id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE shop_items SET {', '.join(fields)} WHERE id=?", args)
+        await db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/shop/orders")
+async def shop_place_order(
+    payload: dict = Body(...),
+    user: dict = Depends(auth_mod.get_current_user),
+):
+    """下單購買周邊商品"""
+    import aiosqlite
+    item_id = int(payload.get("item_id", 0))
+    qty = max(1, int(payload.get("qty", 1)))
+    notes = (payload.get("notes") or "").strip()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        item = await (await db.execute("SELECT * FROM shop_items WHERE id=? AND is_active=1", (item_id,))).fetchone()
+        if not item:
+            raise HTTPException(status_code=404, detail="商品不存在")
+        item = dict(item)
+        if item["stock"] < qty:
+            raise HTTPException(status_code=400, detail=f"庫存不足（剩 {item['stock']} 件）")
+        total = item["price_twd"] * qty
+        cur = await db.execute(
+            "INSERT INTO shop_orders (user_id, item_id, qty, total_price_twd, status, notes) VALUES (?,?,?,?,?,?)",
+            (user["id"], item_id, qty, total, "pending", notes),
+        )
+        await db.execute("UPDATE shop_items SET stock=stock-? WHERE id=?", (qty, item_id))
+        await db.commit()
+        order_id = cur.lastrowid
+    return {"ok": True, "order_id": order_id, "total_price_twd": total}
+
+
+@app.get("/api/me/shop-orders")
+async def my_shop_orders(user: dict = Depends(auth_mod.get_current_user)):
+    """我的周邊訂單"""
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT o.*, s.title, s.image_url FROM shop_orders o
+               JOIN shop_items s ON s.id=o.item_id
+               WHERE o.user_id=? ORDER BY o.id DESC""",
+            (user["id"],),
+        )).fetchall()
+    return {"orders": [dict(r) for r in rows]}
+
+
 @app.get("/api/orderbook/{set_id}/{card_number}")
 async def api_orderbook(set_id: str, card_number: str, grade: int = 10):
     return await mp.get_orderbook(set_id, card_number, grade)

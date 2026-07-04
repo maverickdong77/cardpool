@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cardpool | 設定</title>
+    <link rel="stylesheet" href="/static/liff/style.css">
+    <style>
+        .page-header { background:linear-gradient(135deg,#FFD700 0%,#FFA500 100%); padding:20px; display:flex; align-items:center; gap:12px; }
+        .back-btn { background:rgba(0,0,0,.1); border:none; border-radius:8px; padding:8px 12px; font-size:.85rem; color:#333; font-weight:600; text-decoration:none; }
+        .page-header h1 { font-size:1.2rem; font-weight:700; color:#1a1a1a; }
+
+        .section { margin:16px; background:#fff; border-radius:16px; box-shadow:0 2px 10px rgba(0,0,0,.07); overflow:hidden; }
+        .section-title { padding:14px 16px; font-size:.85rem; font-weight:700; color:#888; background:#fafafa; border-bottom:1px solid #f0f0f0; text-transform:uppercase; letter-spacing:.5px; }
+
+        .avatar-row { padding:20px 16px; display:flex; align-items:center; gap:16px; }
+        .avatar-circle { width:64px; height:64px; border-radius:50%; background:#FFD700; display:flex; align-items:center; justify-content:center; font-size:1.8rem; font-weight:700; color:#1a1a1a; flex-shrink:0; }
+        .avatar-info h2 { font-size:1.05rem; font-weight:700; }
+        .avatar-info p { font-size:.82rem; color:#888; margin-top:2px; }
+        .avatar-info small { font-size:.75rem; color:#bbb; }
+
+        .form-body { padding:16px; display:flex; flex-direction:column; gap:14px; }
+        .field-group label { display:block; font-size:.8rem; color:#666; margin-bottom:5px; font-weight:600; }
+        .field-group input { width:100%; padding:11px 14px; border:1.5px solid #eee; border-radius:10px; font-size:.95rem; outline:none; transition:border .2s; font-family:inherit; }
+        .field-group input:focus { border-color:#FFD700; }
+        .field-group input:disabled { background:#f8f8f8; color:#aaa; }
+        .field-hint { font-size:.75rem; color:#aaa; margin-top:4px; }
+
+        .save-btn { margin:0 16px 16px; padding:13px; background:#FFD700; border:none; border-radius:12px; font-size:.95rem; font-weight:700; color:#1a1a1a; cursor:pointer; width:calc(100% - 32px); transition:opacity .2s; }
+        .save-btn:hover { opacity:.85; }
+        .save-btn:disabled { opacity:.5; cursor:not-allowed; }
+
+        .msg { margin:0 16px 12px; padding:11px 14px; border-radius:10px; font-size:.88rem; display:none; }
+        .msg.ok { background:#e8f5e9; color:#2e7d32; display:block; }
+        .msg.err { background:#ffebee; color:#c62828; display:block; }
+
+        .divider { height:1px; background:#f0f0f0; margin:4px 0; }
+
+        .info-row { padding:13px 16px; display:flex; justify-content:space-between; align-items:center; }
+        .info-row .label { font-size:.88rem; color:#555; }
+        .info-row .value { font-size:.88rem; color:#999; }
+
+        .danger-zone { margin:16px; }
+        .logout-btn { width:100%; padding:13px; border:1.5px solid #f44336; border-radius:12px; background:#fff; color:#f44336; font-size:.9rem; font-weight:700; cursor:pointer; }
+        .logout-btn:hover { background:#f44336; color:#fff; }
+
+        .auth-warn { margin:20px 16px; padding:16px; background:#fff3e0; border-radius:12px; text-align:center; }
+        .auth-warn p { color:#e65100; margin-bottom:12px; font-size:.9rem; }
+        .auth-warn a { display:inline-block; padding:10px 24px; background:#FFD700; border-radius:8px; font-weight:700; color:#1a1a1a; text-decoration:none; }
+
+        .pw-section { padding:0 16px 16px; display:flex; flex-direction:column; gap:12px; }
+        .pw-toggle { background:none; border:none; color:#1565c0; font-size:.85rem; cursor:pointer; text-align:left; padding:8px 16px; }
+    </style>
+</head>
+<body>
+<div class="app">
+    <div class="page-header">
+        <a href="/" class="back-btn">← 首頁</a>
+        <h1>設定</h1>
+    </div>
+
+    <div id="authWarn" class="auth-warn" style="display:none;">
+        <p>⚠️ 請先登入</p>
+        <a href="/">前往登入</a>
+    </div>
+
+    <div id="mainContent" style="display:none;">
+
+        <!-- 個人資料 -->
+        <div class="section">
+            <div class="avatar-row">
+                <div class="avatar-circle" id="avatarCircle">U</div>
+                <div class="avatar-info">
+                    <h2 id="profileName">—</h2>
+                    <p id="profileEmail">—</p>
+                    <small id="profileJoined"></small>
+                </div>
+            </div>
+        </div>
+
+        <!-- 更改暱稱 -->
+        <div class="section">
+            <div class="section-title">個人資料</div>
+            <div class="form-body">
+                <div class="field-group">
+                    <label>暱稱</label>
+                    <input type="text" id="newDisplayName" placeholder="輸入新暱稱">
+                </div>
+                <div class="field-group">
+                    <label>Email（不可更改）</label>
+                    <input type="email" id="emailField" disabled>
+                </div>
+            </div>
+            <div id="profileMsg" class="msg"></div>
+            <button class="save-btn" onclick="saveProfile()">儲存暱稱</button>
+        </div>
+
+        <!-- 更改密碼 -->
+        <div class="section">
+            <div class="section-title">更改密碼</div>
+            <div class="pw-section">
+                <div class="field-group">
+                    <label>目前密碼</label>
+                    <input type="password" id="oldPassword" placeholder="輸入目前密碼" autocomplete="current-password">
+                </div>
+                <div class="field-group">
+                    <label>新密碼</label>
+                    <input type="password" id="newPassword" placeholder="至少 6 字元" autocomplete="new-password">
+                </div>
+                <div class="field-group">
+                    <label>確認新密碼</label>
+                    <input type="password" id="confirmPassword" placeholder="再輸入一次" autocomplete="new-password">
+                </div>
+            </div>
+            <div id="pwMsg" class="msg"></div>
+            <button class="save-btn" onclick="savePassword()">更改密碼</button>
+        </div>
+
+        <!-- 帳號資訊 -->
+        <div class="section">
+            <div class="section-title">帳號資訊</div>
+            <div class="info-row">
+                <span class="label">帳號狀態</span>
+                <span class="value" id="accountRole">—</span>
+            </div>
+            <div class="divider"></div>
+            <div class="info-row">
+                <span class="label">登入方式</span>
+                <span class="value" id="loginMethod">—</span>
+            </div>
+            <div class="divider"></div>
+            <div class="info-row">
+                <span class="label">會員自</span>
+                <span class="value" id="memberSince">—</span>
+            </div>
+        </div>
+
+        <!-- 登出 -->
+        <div class="danger-zone">
+            <button class="logout-btn" onclick="doLogout()">登出</button>
+        </div>
+
+    </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let currentUser = null;
+
+function getToken() { return localStorage.getItem('cp_token'); }
+
+function showMsg(id, text, type) {
+    const el = document.getElementById(id);
+    el.className = 'msg ' + type;
+    el.textContent = text;
+    setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+async function init() {
+    const token = getToken();
+    if (!token) {
+        document.getElementById('authWarn').style.display = '';
+        return;
+    }
+    const r = await fetch(`${API}/api/auth/me`, { headers: { Authorization: 'Bearer ' + token } });
+    if (!r.ok) {
+        localStorage.removeItem('cp_token');
+        document.getElementById('authWarn').style.display = '';
+        return;
+    }
+    const d = await r.json();
+    currentUser = d.user;
+    document.getElementById('mainContent').style.display = '';
+    populateProfile(currentUser);
+}
+
+function populateProfile(user) {
+    const name = user.display_name || user.email;
+    document.getElementById('profileName').textContent = name;
+    document.getElementById('profileEmail').textContent = user.email;
+    document.getElementById('avatarCircle').textContent = name[0].toUpperCase();
+    document.getElementById('newDisplayName').value = user.display_name || '';
+    document.getElementById('emailField').value = user.email;
+
+    const roleMap = { user: '一般會員', staff: '官方人員', admin: '管理員' };
+    document.getElementById('accountRole').textContent = roleMap[user.role] || user.role || '一般會員';
+    document.getElementById('loginMethod').textContent = user.oauth_provider === 'google' ? 'Google 登入' : '帳號密碼';
+
+    if (user.created_at) {
+        const d = new Date(user.created_at);
+        document.getElementById('memberSince').textContent = d.toLocaleDateString('zh-TW');
+        document.getElementById('profileJoined').textContent = `加入於 ${d.toLocaleDateString('zh-TW')}`;
+    }
+}
+
+async function saveProfile() {
+    const display_name = document.getElementById('newDisplayName').value.trim();
+    if (!display_name) return showMsg('profileMsg', '請輸入暱稱', 'err');
+
+    const r = await fetch(`${API}/api/auth/me`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+        body: JSON.stringify({ display_name })
+    });
+    const d = await r.json();
+    if (!r.ok) return showMsg('profileMsg', d.detail || '更新失敗', 'err');
+    showMsg('profileMsg', '✅ 暱稱已更新', 'ok');
+    document.getElementById('profileName').textContent = display_name;
+    document.getElementById('avatarCircle').textContent = display_name[0].toUpperCase();
+}
+
+async function savePassword() {
+    const old_password = document.getElementById('oldPassword').value;
+    const new_password = document.getElementById('newPassword').value;
+    const confirm = document.getElementById('confirmPassword').value;
+
+    if (!old_password || !new_password) return showMsg('pwMsg', '請填寫所有欄位', 'err');
+    if (new_password !== confirm) return showMsg('pwMsg', '新密碼兩次輸入不一致', 'err');
+    if (new_password.length < 6) return showMsg('pwMsg', '新密碼至少 6 字元', 'err');
+
+    const r = await fetch(`${API}/api/auth/me`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+        body: JSON.stringify({ old_password, new_password })
+    });
+    const d = await r.json();
+    if (!r.ok) return showMsg('pwMsg', d.detail || '更新失敗', 'err');
+    showMsg('pwMsg', '✅ 密碼已更新', 'ok');
+    document.getElementById('oldPassword').value = '';
+    document.getElementById('newPassword').value = '';
+    document.getElementById('confirmPassword').value = '';
+}
+
+async function doLogout() {
+    const token = getToken();
+    if (token) await fetch(`${API}/api/auth/logout`, { method: 'POST', headers: { Authorization: 'Bearer ' + token } }).catch(() => {});
+    localStorage.removeItem('cp_token');
+    window.location.href = '/';
+}
+
+init();
+</script>
+</body>
+</html>

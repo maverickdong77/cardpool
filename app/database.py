@@ -172,6 +172,36 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_login_logs_user ON login_logs(user_id, created_at DESC)")
 
+    # ========== 官方周邊商品 (shop) ==========
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS shop_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT,
+            price_twd REAL NOT NULL,
+            image_url TEXT,
+            stock INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS shop_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            qty INTEGER NOT NULL DEFAULT 1,
+            total_price_twd REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (item_id) REFERENCES shop_items(id)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_shop_orders_user ON shop_orders(user_id)")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             token TEXT PRIMARY KEY,
@@ -549,6 +579,7 @@ def init_db():
 
     # ========== card_list 加 SNKR 即時掛單欄位（idempotent ALTER）==========
     for col, typ in [
+        ("name_zh", "TEXT"),
         ("snkr_listing_count", "INTEGER"),
         ("snkr_min_price_jpy", "INTEGER"),
         ("snkr_listing_updated_at", "TIMESTAMP"),
