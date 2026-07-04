@@ -1,4 +1,4 @@
-/* 共用底部導航列 — 在所有頁面引入此檔即可 */
+﻿/* 共用底部導航列 — 在所有頁面引入此檔即可 */
 (function () {
   const path = location.pathname;
 
@@ -9,7 +9,7 @@
     .cp-nav {
       position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
       width: 100%; max-width: 500px;
-      background: #fff;
+      background: #faf7f3;
       border-top: 1px solid #eee;
       display: flex;
       box-shadow: 0 -4px 16px rgba(0,0,0,.07);
