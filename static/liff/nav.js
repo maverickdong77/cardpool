@@ -25,7 +25,7 @@
       text-decoration: none;
     }
     .cp-nav-btn .cp-nav-icon { font-size: 1.4rem; line-height: 1; }
-    .cp-nav-btn.active { color: #e65100; }
+    .cp-nav-btn.active { color: #be9682; }
     .cp-nav-btn:hover { color: #333; }
 
     /* Modal 遮罩 */

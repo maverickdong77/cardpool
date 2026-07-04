@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
@@ -6,7 +6,7 @@
     <title>Cardpool | 賣家上架</title>
     <link rel="stylesheet" href="/static/liff/style.css">
     <style>
-        .page-header { background:linear-gradient(135deg,#FFD700 0%,#FFA500 100%); padding:20px; display:flex; align-items:center; gap:12px; }
+        .page-header { background:linear-gradient(135deg,#be9682 0%,#a07060 100%); padding:20px; display:flex; align-items:center; gap:12px; }
         .back-btn { background:rgba(0,0,0,.1); border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:.85rem; color:#333; font-weight:600; text-decoration:none; }
         .page-header h1 { font-size:1.2rem; font-weight:700; color:#1a1a1a; }
 
@@ -20,8 +20,8 @@
 
         .search-row { padding:12px 16px; display:flex; gap:8px; border-bottom:1px solid #f0f0f0; }
         .search-row input { flex:1; padding:9px 12px; border:1.5px solid #eee; border-radius:8px; font-size:.9rem; outline:none; }
-        .search-row input:focus { border-color:#FFD700; }
-        .search-row button { padding:9px 16px; background:#FFD700; border:none; border-radius:8px; font-weight:700; font-size:.85rem; cursor:pointer; white-space:nowrap; }
+        .search-row input:focus { border-color:#be9682; }
+        .search-row button { padding:9px 16px; background:#be9682; border:none; border-radius:8px; font-weight:700; font-size:.85rem; cursor:pointer; white-space:nowrap; }
 
         .form-body { padding:16px; display:flex; flex-direction:column; gap:14px; }
         .field-group label { display:block; font-size:.8rem; color:#666; margin-bottom:5px; font-weight:600; }
@@ -30,18 +30,18 @@
         .field-group textarea { width:100%; padding:11px 14px; border:1.5px solid #eee; border-radius:10px; font-size:.95rem; outline:none; transition:border .2s; font-family:inherit; }
         .field-group input:focus,
         .field-group select:focus,
-        .field-group textarea:focus { border-color:#FFD700; }
+        .field-group textarea:focus { border-color:#be9682; }
         .field-group textarea { resize:vertical; min-height:80px; }
 
         .condition-tags { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
         .cond-tag { padding:7px 14px; border:1.5px solid #eee; border-radius:20px; font-size:.83rem; cursor:pointer; transition:all .2s; background:#fff; color:#555; }
-        .cond-tag.selected { border-color:#FFD700; background:#fffde7; color:#e65100; font-weight:700; }
+        .cond-tag.selected { border-color:#be9682; background:#f5ede8; color:#e65100; font-weight:700; }
 
         .price-row { display:flex; align-items:center; gap:8px; }
         .price-row input { flex:1; }
         .price-row .currency { font-size:.9rem; color:#888; white-space:nowrap; }
 
-        .submit-btn { margin:0 16px 20px; padding:15px; background:#FFD700; border:none; border-radius:12px; font-size:1.05rem; font-weight:700; color:#1a1a1a; cursor:pointer; width:calc(100% - 32px); transition:opacity .2s; }
+        .submit-btn { margin:0 16px 20px; padding:15px; background:#be9682; border:none; border-radius:12px; font-size:1.05rem; font-weight:700; color:#1a1a1a; cursor:pointer; width:calc(100% - 32px); transition:opacity .2s; }
         .submit-btn:hover { opacity:.85; }
         .submit-btn:disabled { opacity:.5; cursor:not-allowed; }
 
@@ -51,13 +51,13 @@
 
         .auth-warn { margin:20px 16px; padding:16px; background:#fff3e0; border-radius:12px; text-align:center; }
         .auth-warn p { font-size:.9rem; color:#e65100; margin-bottom:12px; }
-        .auth-warn a { display:inline-block; padding:10px 24px; background:#FFD700; border-radius:8px; font-weight:700; color:#1a1a1a; text-decoration:none; }
+        .auth-warn a { display:inline-block; padding:10px 24px; background:#be9682; border-radius:8px; font-weight:700; color:#1a1a1a; text-decoration:none; }
 
         .info-badge { display:inline-flex; align-items:center; gap:4px; background:#e3f2fd; color:#1565c0; border-radius:6px; padding:4px 10px; font-size:.78rem; margin-top:4px; }
 
         .search-results { max-height:200px; overflow-y:auto; }
         .search-result-item { padding:12px 16px; border-bottom:1px solid #f0f0f0; cursor:pointer; transition:background .15s; }
-        .search-result-item:hover { background:#fffde7; }
+        .search-result-item:hover { background:#f5ede8; }
         .search-result-item .name { font-size:.9rem; font-weight:600; }
         .search-result-item .sub { font-size:.78rem; color:#888; }
     </style>

@@ -1,4 +1,4 @@
-/* Card Detail Page Styles */
+﻿/* Card Detail Page Styles */
 
 .card-page .header {
     display: flex;
@@ -74,7 +74,7 @@
 }
 
 .psa-badge {
-    background: #FFD700;
+    background: #be9682;
     color: #333;
     padding: 4px 10px;
     border-radius: 12px;
@@ -174,7 +174,7 @@
 }
 
 .chart-tab.active {
-    background: #FFD700;
+    background: #be9682;
     color: #333;
     font-weight: 600;
 }

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
@@ -6,22 +6,22 @@
     <title>Cardpool | 首頁</title>
     <link rel="stylesheet" href="/static/liff/style.css">
     <style>
-        .hero { background: linear-gradient(135deg,#FFD700 0%,#FFA500 100%); padding:28px 20px 20px; text-align:center; }
+        .hero { background: linear-gradient(135deg,#be9682 0%,#a07060 100%); padding:28px 20px 20px; text-align:center; }
         .hero h1 { font-size:1.8rem; font-weight:800; color:#1a1a1a; letter-spacing:1px; }
         .hero p { font-size:.9rem; color:#555; margin-top:4px; }
 
         .auth-card { background:#fff; margin:16px; border-radius:16px; box-shadow:0 2px 12px rgba(0,0,0,.08); overflow:hidden; }
         .auth-tabs { display:flex; border-bottom:1px solid #eee; }
         .auth-tab { flex:1; padding:14px; text-align:center; font-size:.95rem; font-weight:600; color:#999; cursor:pointer; transition:all .2s; border:none; background:#fff; }
-        .auth-tab.active { color:#333; border-bottom:3px solid #FFD700; }
+        .auth-tab.active { color:#333; border-bottom:3px solid #be9682; }
 
         .auth-form { padding:20px; }
         .field-group { margin-bottom:14px; }
         .field-group label { display:block; font-size:.8rem; color:#666; margin-bottom:4px; font-weight:600; }
         .field-group input { width:100%; padding:11px 14px; border:1.5px solid #eee; border-radius:10px; font-size:.95rem; outline:none; transition:border .2s; }
-        .field-group input:focus { border-color:#FFD700; }
+        .field-group input:focus { border-color:#be9682; }
 
-        .btn-primary { width:100%; padding:13px; background:#FFD700; border:none; border-radius:10px; font-size:1rem; font-weight:700; color:#1a1a1a; cursor:pointer; margin-top:4px; transition:opacity .2s; }
+        .btn-primary { width:100%; padding:13px; background:#be9682; border:none; border-radius:10px; font-size:1rem; font-weight:700; color:#1a1a1a; cursor:pointer; margin-top:4px; transition:opacity .2s; }
         .btn-primary:hover { opacity:.85; }
         .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
 
@@ -31,19 +31,19 @@
         .msg.info { background:#e3f2fd; color:#1565c0; display:block; }
 
         .verify-step { display:none; }
-        .dev-code-box { background:#fffde7; border:1px solid #FFD700; border-radius:8px; padding:10px 14px; margin:12px 0; font-size:.88rem; color:#555; }
+        .dev-code-box { background:#f5ede8; border:1px solid #be9682; border-radius:8px; padding:10px 14px; margin:12px 0; font-size:.88rem; color:#555; }
         .dev-code-box strong { font-size:1.4rem; color:#e65100; display:block; margin-top:4px; letter-spacing:4px; }
 
         /* Logged in state */
         .user-panel { padding:20px; }
         .user-header { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
-        .avatar { width:48px; height:48px; border-radius:50%; background:#FFD700; display:flex; align-items:center; justify-content:center; font-size:1.4rem; font-weight:700; color:#1a1a1a; }
+        .avatar { width:48px; height:48px; border-radius:50%; background:#be9682; display:flex; align-items:center; justify-content:center; font-size:1.4rem; font-weight:700; color:#1a1a1a; }
         .user-info h2 { font-size:1.1rem; font-weight:700; }
         .user-info p { font-size:.8rem; color:#888; }
 
         .action-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
         .action-btn-card { padding:16px 12px; border-radius:12px; border:1.5px solid #eee; background:#fff; cursor:pointer; text-align:center; transition:all .2s; text-decoration:none; display:block; }
-        .action-btn-card:hover { border-color:#FFD700; background:#fffde7; transform:translateY(-2px); }
+        .action-btn-card:hover { border-color:#be9682; background:#f5ede8; transform:translateY(-2px); }
         .action-btn-card .icon { font-size:1.8rem; margin-bottom:6px; }
         .action-btn-card .label { font-size:.85rem; font-weight:600; color:#333; }
         .action-btn-card .desc { font-size:.75rem; color:#999; margin-top:2px; }

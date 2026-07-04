@@ -1,4 +1,4 @@
-* {
+﻿* {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
@@ -19,7 +19,7 @@ body {
 
 /* Header */
 .header {
-    background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+    background: linear-gradient(135deg, #be9682 0%, #a07060 100%);
     padding: 20px;
     text-align: center;
     color: #333;
@@ -61,7 +61,7 @@ body {
 .mode-tab.active {
     color: #333;
     font-weight: 600;
-    border-bottom: 3px solid #FFD700;
+    border-bottom: 3px solid #be9682;
 }
 
 .mode-tab svg {
@@ -91,7 +91,7 @@ body {
 }
 
 .tab.active {
-    background: #FFD700;
+    background: #be9682;
     color: #333;
     font-weight: 600;
 }
@@ -110,19 +110,19 @@ body {
 .search-box input {
     flex: 1;
     padding: 12px 16px;
-    border: 2px solid #FFD700;
+    border: 2px solid #be9682;
     border-radius: 8px;
     font-size: 1rem;
     outline: none;
 }
 
 .search-box input:focus {
-    border-color: #FFA500;
+    border-color: #a07060;
 }
 
 .search-btn {
     padding: 12px 16px;
-    background: #FFD700;
+    background: #be9682;
     border: none;
     border-radius: 8px;
     cursor: pointer;
@@ -132,7 +132,7 @@ body {
 }
 
 .search-btn:active {
-    background: #FFA500;
+    background: #a07060;
 }
 
 .quick-search {
@@ -153,8 +153,8 @@ body {
 }
 
 .quick-btn:active {
-    background: #FFD700;
-    border-color: #FFD700;
+    background: #be9682;
+    border-color: #be9682;
 }
 
 /* Loading */
@@ -170,7 +170,7 @@ body {
     width: 40px;
     height: 40px;
     border: 3px solid #f0f0f0;
-    border-top-color: #FFD700;
+    border-top-color: #be9682;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
@@ -332,7 +332,7 @@ body {
 }
 
 .action-btn.primary {
-    background: #FFD700;
+    background: #be9682;
     color: #333;
 }
 
@@ -366,7 +366,7 @@ body {
 
 .confirm-btn {
     padding: 12px 40px;
-    background: #FFD700;
+    background: #be9682;
     border: none;
     border-radius: 8px;
     font-size: 1rem;
@@ -411,7 +411,7 @@ body {
 .lang-tab.active {
     color: #333;
     font-weight: 600;
-    border-bottom: 3px solid #FFD700;
+    border-bottom: 3px solid #be9682;
 }
 
 /* 搜尋區語言過濾 */
@@ -441,9 +441,9 @@ body {
 }
 
 .search-lang-btn.active {
-    background: #FFD700;
+    background: #be9682;
     color: #333;
-    border-color: #FFD700;
+    border-color: #be9682;
     font-weight: 600;
 }
 
@@ -632,7 +632,7 @@ body {
     align-items: center;
     gap: 4px;
     padding: 6px 12px;
-    background: #FFD700;
+    background: #be9682;
     color: #333;
     border: none;
     border-radius: 16px;
