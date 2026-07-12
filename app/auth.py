@@ -16,6 +16,7 @@ import aiosqlite
 from fastapi import Header, HTTPException, status
 
 from app.database import DB_PATH
+from app.db_pg import get_db
 
 # pbkdf2 參數
 PBKDF2_ITER = 200_000
@@ -62,7 +63,7 @@ async def create_user(email: str, password: str, display_name: Optional[str] = N
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         # 檢查 email 是否已用
         cur = await db.execute("SELECT id FROM users WHERE email=?", (email,))
         if await cur.fetchone():
@@ -77,7 +78,7 @@ async def create_user(email: str, password: str, display_name: Optional[str] = N
 
 
 async def get_user_by_id(user_id: int) -> Optional[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT id, email, display_name, line_user_id, phone, phone_verified, role, created_at FROM users WHERE id=?",
@@ -89,7 +90,7 @@ async def get_user_by_id(user_id: int) -> Optional[dict]:
 
 async def authenticate(email: str, password: str) -> Optional[dict]:
     email = (email or "").strip().lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT id, email, display_name, line_user_id, phone, phone_verified, role, password_hash FROM users WHERE email=?",
@@ -116,7 +117,7 @@ async def authenticate(email: str, password: str) -> Optional[dict]:
 async def create_session(user_id: int) -> str:
     token = secrets.token_urlsafe(32)
     expires = (datetime.utcnow() + timedelta(days=SESSION_DAYS)).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         await db.execute(
             "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
             (token, user_id, expires),
@@ -126,7 +127,7 @@ async def create_session(user_id: int) -> str:
 
 
 async def delete_session(token: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         await db.execute("DELETE FROM sessions WHERE token=?", (token,))
         await db.commit()
 
@@ -134,7 +135,7 @@ async def delete_session(token: str) -> None:
 async def get_user_by_session(token: str) -> Optional[dict]:
     if not token:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT u.id, u.email, u.display_name, u.line_user_id,
@@ -204,7 +205,7 @@ def require_role(*allowed_roles: str):
 async def log_login(user_id: int, method: str, ip: Optional[str] = None,
                     user_agent: Optional[str] = None) -> None:
     """記錄登入事件（fire-and-forget）。"""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         await db.execute(
             "INSERT INTO login_logs (user_id, method, ip, user_agent) VALUES (?, ?, ?, ?)",
             (user_id, method, ip, user_agent),
@@ -277,7 +278,7 @@ async def get_or_create_google_user(google_info: dict) -> dict:
     if not google_id or not email:
         raise HTTPException(status_code=400, detail="Google 帳號缺少必要資訊")
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
 
         # 1) 先用 google_id 找
@@ -318,7 +319,7 @@ async def get_or_create_google_user(google_info: dict) -> dict:
 
 
 async def get_user_by_id(user_id: int) -> Optional[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT id, email, display_name, line_user_id, phone, phone_verified,
@@ -328,3 +329,4 @@ async def get_user_by_id(user_id: int) -> Optional[dict]:
         )
         row = await cur.fetchone()
         return dict(row) if row else None
+

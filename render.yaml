@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: cardpool-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # set manually in Render dashboard
+      - key: CARDPOOL_DISABLE_JOBS
+        value: "1"           # disable background scrapers on Render (RAM saving)
+      - key: PYTHONUTF8
+        value: "1"
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: ADMIN_LINE_USER_ID
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false

@@ -16,6 +16,7 @@ import aiosqlite
 from fastapi import HTTPException
 
 from app.database import DB_PATH
+from app.db_pg import get_db
 
 DEFAULT_EXPIRES_DAYS = 30
 GRADES_ALLOWED = (10, 9, 0)  # 0 = Raw 未鑑定
@@ -87,7 +88,7 @@ async def _card_exists(set_id: str, card_number: str) -> bool:
 async def get_orderbook(set_id: str, card_number: str, grade: int) -> dict:
     """回傳指定卡 + grade 的當下訂單簿。"""
     grade = _validate_grade(grade)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
 
         cur = await db.execute(
@@ -133,7 +134,7 @@ async def get_orderbook_depth(set_id: str, card_number: str, grade: int, limit: 
     Box marketplace 用：盒裝詳情頁顯多筆掛單。隱藏 user_id、只回 masked alias。
     """
     grade = _validate_grade(grade)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
 
         ask_cur = await db.execute(
@@ -205,7 +206,7 @@ async def create_listing(user_id: int, payload: dict) -> dict:
         raise HTTPException(status_code=400, detail=f"condition 須為 {'/'.join(CONDITIONS_ALLOWED)}")
 
     expires_at = (datetime.utcnow() + timedelta(days=DEFAULT_EXPIRES_DAYS)).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         cur = await db.execute(
             """INSERT INTO listings
                (user_id, set_id, card_number, grade, psa_cert_number, ask_price_twd,
@@ -253,7 +254,7 @@ async def _email_listing_confirmed(user_id: int, listing: dict) -> None:
 
 
 async def cancel_listing(user_id: int, listing_id: int) -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         cur = await db.execute(
             "SELECT user_id, status FROM listings WHERE id=?",
             (listing_id,),
@@ -274,7 +275,7 @@ async def cancel_listing(user_id: int, listing_id: int) -> dict:
 
 
 async def get_listing(listing_id: int) -> Optional[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM listings WHERE id=?", (listing_id,))
         row = await cur.fetchone()
@@ -299,7 +300,7 @@ async def create_bid(user_id: int, payload: dict) -> dict:
         raise HTTPException(status_code=404, detail="找不到此卡片")
 
     expires_at = (datetime.utcnow() + timedelta(days=DEFAULT_EXPIRES_DAYS)).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         cur = await db.execute(
             """INSERT INTO bids
                (user_id, set_id, card_number, grade, bid_price_twd,
@@ -319,7 +320,7 @@ async def create_bid(user_id: int, payload: dict) -> dict:
 
 
 async def cancel_bid(user_id: int, bid_id: int) -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         cur = await db.execute(
             "SELECT user_id, status FROM bids WHERE id=?",
             (bid_id,),
@@ -338,7 +339,7 @@ async def cancel_bid(user_id: int, bid_id: int) -> dict:
 
 async def delete_bid_record(user_id: int, bid_id: int) -> dict:
     """硬刪除自己 cancelled / expired / matched 的 bid。active 不能刪。"""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         cur = await db.execute("SELECT user_id, status FROM bids WHERE id=?", (bid_id,))
         row = await cur.fetchone()
         if not row:
@@ -354,7 +355,7 @@ async def delete_bid_record(user_id: int, bid_id: int) -> dict:
 
 async def delete_listing_record(user_id: int, listing_id: int) -> dict:
     """硬刪除自己 cancelled / expired / sold 的 listing。active 不能刪。"""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         cur = await db.execute("SELECT user_id, status FROM listings WHERE id=?", (listing_id,))
         row = await cur.fetchone()
         if not row:
@@ -369,7 +370,7 @@ async def delete_listing_record(user_id: int, listing_id: int) -> dict:
 
 
 async def get_bid(bid_id: int) -> Optional[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM bids WHERE id=?", (bid_id,))
         row = await cur.fetchone()
@@ -383,7 +384,7 @@ async def get_bid(bid_id: int) -> Optional[dict]:
 async def _match_after_listing(listing_id: int) -> Optional[dict]:
     """新 listing 進來：找最高的同卡 active bid，若 bid >= ask → 撮合。
     成交價 = listing.ask_price_twd（賣家要價），符合一般訂單簿規則：先掛者得價"""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM listings WHERE id=? AND status='active'", (listing_id,))
         listing = await cur.fetchone()
@@ -415,7 +416,7 @@ async def _match_after_listing(listing_id: int) -> Optional[dict]:
 async def _match_after_bid(bid_id: int) -> Optional[dict]:
     """新 bid 進來：找最低的同卡 active listing，若 ask <= bid → 撮合。
     成交價 = listing.ask_price_twd（先掛的賣家要價）"""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM bids WHERE id=? AND status='active'", (bid_id,))
         bid = await cur.fetchone()
@@ -450,7 +451,7 @@ async def _create_trade(listing, bid, price: float) -> dict:
     add_case = bid.get("add_protective_case") or 0
     case_price = bid.get("protective_case_price_twd") or 0
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db() as db:
         cur = await db.execute(
             """INSERT INTO trades
                (listing_id, bid_id, buyer_id, seller_id, set_id, card_number, grade,

@@ -57,6 +57,7 @@ from app.set_categories import get_all_categories, get_set_order
 from app.job_controller import jobs as job_ctrl
 from app import auth as auth_mod
 from app import marketplace as mp
+from app.db_pg import get_db as _mp_db, init_pg_tables as _init_pg_tables, USE_PG as _USE_PG
 
 # 載入環境變數
 load_dotenv()
@@ -314,6 +315,14 @@ async def _sync_all_loop(job=None):
 async def lifespan(app: FastAPI):
     """應用程式生命週期管理"""
     print("[Cardpool] Starting...")
+
+    # 初始化 PostgreSQL marketplace 表（DATABASE_URL 有設定時）
+    if _USE_PG:
+        try:
+            await _init_pg_tables()
+            print("[Cardpool] PostgreSQL marketplace tables ready")
+        except Exception as e:
+            print(f"[Cardpool] PG init fail: {e}")
 
     # 確保排程要用的表已建立
     try:
@@ -3464,7 +3473,7 @@ async def auth_register_request(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="密碼至少 6 字元")
 
     # 2. email 已註冊檢查
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         if await (await db.execute("SELECT id FROM users WHERE email=?", (email,))).fetchone():
             raise HTTPException(status_code=409, detail="此 email 已註冊")
 
@@ -3530,7 +3539,7 @@ async def auth_register_verify(payload: dict = Body(...)):
     if not _re_phone.fullmatch(r"\d{6}", code):
         raise HTTPException(status_code=400, detail="驗證碼格式錯誤（6 位數字）")
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         # 1. 查暫存資料
         cur = await db.execute(
             "SELECT code, password_hash, display_name, attempts, expires_at FROM email_verifications WHERE email=?",
@@ -3629,7 +3638,7 @@ async def auth_forgot_password(payload: dict = Body(...)):
     if not email:
         return out
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         cur = await db.execute("SELECT id, display_name FROM users WHERE email=?", (email,))
         u = await cur.fetchone()
         if not u:
@@ -3666,7 +3675,7 @@ async def auth_reset_password(payload: dict = Body(...)):
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="密碼至少 6 字元")
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         cur = await db.execute(
             "SELECT user_id, used, expires_at FROM password_resets WHERE token=?",
             (token,),
@@ -3800,7 +3809,7 @@ async def auth_google_callback(request: Request, code: str = "", state: str = ""
 async def my_login_logs(user: dict = Depends(auth_mod.get_current_user)):
     """用戶自己的登入紀錄（最近 20 筆）。"""
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT method, ip, user_agent, created_at FROM login_logs WHERE user_id=? ORDER BY created_at DESC LIMIT 20",
@@ -3829,7 +3838,7 @@ async def update_my_profile(
         old_password = payload.get("old_password", "")
         if len(new_password) < 6:
             raise HTTPException(status_code=400, detail="新密碼至少 6 字元")
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _mp_db() as db:
             row = await (await db.execute("SELECT password_hash FROM users WHERE id=?", (user["id"],))).fetchone()
         if not row or not auth_mod.verify_password(old_password, row[0]):
             raise HTTPException(status_code=400, detail="舊密碼錯誤")
@@ -3840,7 +3849,7 @@ async def update_my_profile(
         raise HTTPException(status_code=400, detail="沒有可更新的欄位")
 
     args.append(user["id"])
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         await db.execute(f"UPDATE users SET {', '.join(updates)} WHERE id=?", args)
         await db.commit()
     return {"ok": True, "message": "個人資料已更新"}
@@ -3852,7 +3861,7 @@ async def update_my_profile(
 async def shop_list_items(active_only: bool = True):
     """列出所有上架商品（公開）"""
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         db.row_factory = aiosqlite.Row
         sql = "SELECT * FROM shop_items"
         if active_only:
@@ -3875,7 +3884,7 @@ async def shop_add_item(
     price = float(payload.get("price_twd", 0))
     if price <= 0:
         raise HTTPException(status_code=400, detail="price_twd 必填")
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         cur = await db.execute(
             "INSERT INTO shop_items (title, description, price_twd, image_url, stock, is_active, created_by) VALUES (?,?,?,?,?,1,?)",
             (title, payload.get("description", ""), price, payload.get("image_url", ""),
@@ -3907,7 +3916,7 @@ async def shop_update_item(
     if not fields:
         raise HTTPException(status_code=400, detail="無可更新欄位")
     args.append(item_id)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         await db.execute(f"UPDATE shop_items SET {', '.join(fields)} WHERE id=?", args)
         await db.commit()
     return {"ok": True}
@@ -3924,7 +3933,7 @@ async def shop_place_order(
     qty = max(1, int(payload.get("qty", 1)))
     notes = (payload.get("notes") or "").strip()
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         db.row_factory = aiosqlite.Row
         item = await (await db.execute("SELECT * FROM shop_items WHERE id=? AND is_active=1", (item_id,))).fetchone()
         if not item:
@@ -3947,7 +3956,7 @@ async def shop_place_order(
 async def my_shop_orders(user: dict = Depends(auth_mod.get_current_user)):
     """我的周邊訂單"""
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT o.*, s.title, s.image_url FROM shop_orders o
@@ -4148,7 +4157,7 @@ async def _user_stats(db, user_id: int) -> dict:
 async def api_user_profile(user_id: int):
     """公開 user profile：display_name + 等級 + 評分 + 徽章"""
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT id, display_name FROM users WHERE id=?", (user_id,))
         u = await cur.fetchone()
@@ -4166,7 +4175,7 @@ async def api_user_profile(user_id: int):
 async def api_my_profile(user: dict = Depends(auth_mod.get_current_user)):
     """我自己的 profile"""
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         stats = await _user_stats(db, user["id"])
     return {
         "user_id": user["id"],
@@ -4188,7 +4197,7 @@ async def api_post_rating(trade_id: int, payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="rating 必須 1-5")
     comment = (payload.get("comment") or "")[:500]
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT buyer_id, seller_id, status FROM trades WHERE id=?", (trade_id,)
@@ -4252,7 +4261,7 @@ async def api_send_message(payload: dict = Body(...),
     if receiver_id == user["id"]:
         raise HTTPException(status_code=400, detail="不能傳給自己")
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         # 驗證 receiver 存在
         cur = await db.execute("SELECT 1 FROM users WHERE id=?", (receiver_id,))
         if not await cur.fetchone():
@@ -4311,7 +4320,7 @@ async def api_thread_messages(other_id: int, limit: int = 100,
                                user: dict = Depends(auth_mod.get_current_user)):
     """跟某 user 的完整對話"""
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute("""
             SELECT id, sender_id, receiver_id, body, read_at, created_at, trade_id
@@ -4338,7 +4347,7 @@ async def api_thread_messages(other_id: int, limit: int = 100,
 async def api_unread_count(user: dict = Depends(auth_mod.get_current_user)):
     """未讀訊息總數（用於導航小紅點）"""
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         cur = await db.execute(
             "SELECT COUNT(*) FROM messages WHERE receiver_id=? AND read_at IS NULL",
             (user["id"],),
@@ -4351,7 +4360,7 @@ async def api_unread_count(user: dict = Depends(auth_mod.get_current_user)):
 async def api_user_ratings(user_id: int, limit: int = 20):
     """公開 user 收到的評價（最新 N 筆）"""
     import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _mp_db() as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT tr.rating, tr.comment, tr.role, tr.created_at,

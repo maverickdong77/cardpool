@@ -6,6 +6,7 @@ beautifulsoup4
 lxml
 python-dotenv
 aiosqlite
+asyncpg
 apscheduler
 playwright
 psutil
