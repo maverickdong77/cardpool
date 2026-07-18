@@ -9,10 +9,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional
 from app.scraper.browser_pool import get_browser
-from playwright_stealth import Stealth
 
-# 2026-05-21 Path B1：用 stealth lib 取代手動 add_init_script、繞 anti-bot fingerprint
-_stealth = Stealth()
+# Lazy-load playwright_stealth so the app starts even without browsers installed
+try:
+    from playwright_stealth import Stealth as _StealthCls
+    _stealth = _StealthCls()
+except ImportError:
+    _stealth = None
 
 # 匯率
 USD_TO_TWD = 32.0
