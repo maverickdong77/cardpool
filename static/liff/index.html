@@ -192,6 +192,11 @@ function getToken() { return localStorage.getItem('cp_token'); }
 function setToken(t) { localStorage.setItem('cp_token', t); }
 function clearToken() { localStorage.removeItem('cp_token'); }
 
+async function safeJson(r) {
+    try { return await r.json(); }
+    catch { return null; }
+}
+
 async function doLogin() {
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
@@ -203,8 +208,8 @@ async function doLogin() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password })
         });
-        const d = await r.json();
-        if (!r.ok) return showMsg('loginMsg', d.detail || '登入失敗', 'err');
+        const d = await safeJson(r);
+        if (!r.ok) return showMsg('loginMsg', d?.detail || '伺服器暫時無法連線，請稍後再試', 'err');
         setToken(d.token);
         showUser(d.user);
     } catch (e) {
@@ -224,8 +229,8 @@ async function doRegisterRequest() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password, display_name })
         });
-        const d = await r.json();
-        if (!r.ok) return showMsg('regMsg1', d.detail || '註冊失敗', 'err');
+        const d = await safeJson(r);
+        if (!r.ok) return showMsg('regMsg1', d?.detail || '伺服器暫時無法連線，請稍後再試', 'err');
 
         // 顯示 Step 2
         document.getElementById('registerStep1').style.display = 'none';
@@ -252,8 +257,8 @@ async function doRegisterVerify() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, code })
         });
-        const d = await r.json();
-        if (!r.ok) return showMsg('regMsg2', d.detail || '驗證失敗', 'err');
+        const d = await safeJson(r);
+        if (!r.ok) return showMsg('regMsg2', d?.detail || '伺服器暫時無法連線，請稍後再試', 'err');
         setToken(d.token);
         showUser(d.user);
     } catch (e) {
