@@ -133,14 +133,16 @@ class PGConn:
             return _PGCursor(rows=rows)
 
         if up.startswith("INSERT"):
+            ret = pg.rstrip(" \n\r\t;") + " RETURNING id"
             try:
-                ret = pg.rstrip(" \n\r\t;") + " RETURNING id"
-                row = await self._conn.fetchrow(ret, *args)
+                # Wrap in nested transaction (savepoint) so that if RETURNING id
+                # fails (table has no id column), the savepoint rolls back cleanly
+                # and the outer transaction stays valid.
+                async with self._conn.transaction():
+                    row = await self._conn.fetchrow(ret, *args)
                 return _PGCursor(lastrowid=row["id"] if row else None)
-            except asyncpg.UndefinedColumnError:
-                await self._conn.execute(pg, *args)
-                return _PGCursor()
             except Exception:
+                # RETURNING id failed (no id column, or other error) – plain INSERT
                 await self._conn.execute(pg, *args)
                 return _PGCursor()
 
