@@ -3981,6 +3981,34 @@ async def api_orderbook_depth(set_id: str, card_number: str, grade: int = 10, li
     return await mp.get_orderbook_depth(set_id, card_number, grade, limit)
 
 
+@app.get("/api/listings")
+async def api_recent_listings(limit: int = 8):
+    """公開：最新上架（首頁用）"""
+    lim = min(max(1, limit), 50)
+    async with _mp_db() as db:
+        cur = await db.execute(
+            "SELECT id, set_id, card_number, grade, ask_price_twd, condition, created_at "
+            "FROM listings WHERE status='active' ORDER BY created_at DESC LIMIT ?",
+            (lim,)
+        )
+        rows = await cur.fetchall()
+    return {"listings": [dict(r.items()) for r in rows]}
+
+
+@app.get("/api/trades/recent")
+async def api_recent_trades(limit: int = 5):
+    """公開：最新成交（首頁用）"""
+    lim = min(max(1, limit), 30)
+    async with _mp_db() as db:
+        cur = await db.execute(
+            "SELECT id, set_id, card_number, grade, price_twd, created_at "
+            "FROM trades WHERE status='completed' ORDER BY created_at DESC LIMIT ?",
+            (lim,)
+        )
+        rows = await cur.fetchall()
+    return {"trades": [dict(r.items()) for r in rows]}
+
+
 @app.post("/api/listings")
 async def api_create_listing(payload: dict = Body(...),
                              user: dict = Depends(auth_mod.get_current_user)):

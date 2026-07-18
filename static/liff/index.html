@@ -1,172 +1,299 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cardpool | 首頁</title>
+    <title>Cardpool | 寶可夢卡牌交易市場</title>
     <link rel="stylesheet" href="/static/liff/style.css?v=2">
     <style>
-        .hero { background: linear-gradient(135deg,#be9682 0%,#a07060 100%); padding:28px 20px 20px; text-align:center; }
-        .hero h1 { font-size:1.8rem; font-weight:800; color:#1a1a1a; letter-spacing:1px; }
-        .hero p { font-size:.9rem; color:#555; margin-top:4px; }
+        /* ── Header ── */
+        .site-header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            height: 52px;
+            box-shadow: 0 1px 0 rgba(0,0,0,.07);
+        }
+        .site-logo {
+            font-size: 1.2rem;
+            font-weight: 800;
+            color: #1a1a1a;
+            letter-spacing: .5px;
+            text-decoration: none;
+        }
+        .header-right { display: flex; align-items: center; gap: 8px; }
+        .btn-login {
+            padding: 7px 16px;
+            background: #be9682;
+            border: none;
+            border-radius: 20px;
+            font-size: .85rem;
+            font-weight: 700;
+            color: #1a1a1a;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            transition: opacity .2s;
+        }
+        .btn-login:hover { opacity: .85; }
+        .header-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: #be9682;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            font-weight: 700;
+            color: #1a1a1a;
+            cursor: pointer;
+            text-decoration: none;
+        }
 
-        .auth-card { background:#fff; margin:16px; border-radius:16px; box-shadow:0 2px 12px rgba(0,0,0,.08); overflow:hidden; }
-        .auth-tabs { display:flex; border-bottom:1px solid #eee; }
-        .auth-tab { flex:1; padding:14px; text-align:center; font-size:.95rem; font-weight:600; color:#999; cursor:pointer; transition:all .2s; border:none; background:#fff; }
-        .auth-tab.active { color:#333; border-bottom:3px solid #be9682; }
+        /* ── Carousel ── */
+        .carousel {
+            position: relative;
+            overflow: hidden;
+            background: #000;
+        }
+        .carousel-track {
+            display: flex;
+            transition: transform .45s cubic-bezier(.4,0,.2,1);
+            will-change: transform;
+        }
+        .carousel-slide {
+            flex: 0 0 100%;
+            height: 200px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            padding: 20px;
+            text-align: center;
+            position: relative;
+        }
+        .carousel-slide h2 {
+            font-size: 1.5rem;
+            font-weight: 800;
+            text-shadow: 0 1px 4px rgba(0,0,0,.3);
+            margin-bottom: 6px;
+        }
+        .carousel-slide p {
+            font-size: .88rem;
+            opacity: .9;
+            text-shadow: 0 1px 3px rgba(0,0,0,.3);
+        }
+        .slide-1 { background: linear-gradient(135deg, #be9682 0%, #7a4e3a 100%); }
+        .slide-2 { background: linear-gradient(135deg, #6b8e6e 0%, #3a5e3a 100%); }
+        .slide-3 { background: linear-gradient(135deg, #7a82be 0%, #3a3e8a 100%); }
+        .slide-4 { background: linear-gradient(135deg, #be9e60 0%, #7a5e20 100%); }
 
-        .auth-form { padding:20px; }
-        .field-group { margin-bottom:14px; }
-        .field-group label { display:block; font-size:.8rem; color:#666; margin-bottom:4px; font-weight:600; }
-        .field-group input { width:100%; padding:11px 14px; border:1.5px solid #eee; border-radius:10px; font-size:.95rem; outline:none; transition:border .2s; }
-        .field-group input:focus { border-color:#be9682; }
+        .carousel-dots {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 6px;
+        }
+        .carousel-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: rgba(255,255,255,.5);
+            cursor: pointer;
+            transition: background .2s;
+            border: none;
+            padding: 0;
+        }
+        .carousel-dot.active { background: #fff; }
 
-        .btn-primary { width:100%; padding:13px; background:#be9682; border:none; border-radius:10px; font-size:1rem; font-weight:700; color:#1a1a1a; cursor:pointer; margin-top:4px; transition:opacity .2s; }
-        .btn-primary:hover { opacity:.85; }
-        .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
+        .carousel-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 32px;
+            height: 32px;
+            background: rgba(0,0,0,.25);
+            border: none;
+            border-radius: 50%;
+            color: #fff;
+            font-size: 1.2rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background .2s;
+        }
+        .carousel-arrow:hover { background: rgba(0,0,0,.45); }
+        .carousel-prev { left: 10px; }
+        .carousel-next { right: 10px; }
 
-        .msg { margin-top:12px; padding:10px 14px; border-radius:8px; font-size:.88rem; display:none; }
-        .msg.ok { background:#e8f5e9; color:#2e7d32; display:block; }
-        .msg.err { background:#ffebee; color:#c62828; display:block; }
-        .msg.info { background:#e3f2fd; color:#1565c0; display:block; }
+        /* ── Sections ── */
+        .section { padding: 16px; }
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .section-title {
+            font-size: 1rem;
+            font-weight: 800;
+            color: #1a1a1a;
+        }
+        .section-more {
+            font-size: .8rem;
+            color: #be9682;
+            text-decoration: none;
+            font-weight: 600;
+        }
 
-        .verify-step { display:none; }
-        .dev-code-box { background:#f5ede8; border:1px solid #be9682; border-radius:8px; padding:10px 14px; margin:12px 0; font-size:.88rem; color:#555; }
-        .dev-code-box strong { font-size:1.4rem; color:#e65100; display:block; margin-top:4px; letter-spacing:4px; }
+        /* ── Listings grid ── */
+        .listings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .listing-card {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 1px 6px rgba(0,0,0,.07);
+            padding: 14px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .listing-badge {
+            display: inline-block;
+            font-size: .7rem;
+            font-weight: 700;
+            background: #f0e8d8;
+            color: #8a5a30;
+            padding: 2px 8px;
+            border-radius: 20px;
+            width: fit-content;
+            margin-bottom: 4px;
+        }
+        .listing-name {
+            font-size: .85rem;
+            font-weight: 700;
+            color: #1a1a1a;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .listing-sub {
+            font-size: .75rem;
+            color: #888;
+        }
+        .listing-price {
+            font-size: 1.05rem;
+            font-weight: 800;
+            color: #be9682;
+            margin-top: 4px;
+        }
 
-        /* Logged in state */
-        .user-panel { padding:20px; }
-        .user-header { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
-        .avatar { width:48px; height:48px; border-radius:50%; background:#be9682; display:flex; align-items:center; justify-content:center; font-size:1.4rem; font-weight:700; color:#1a1a1a; }
-        .user-info h2 { font-size:1.1rem; font-weight:700; }
-        .user-info p { font-size:.8rem; color:#888; }
+        /* ── Trades list ── */
+        .trades-list { display: flex; flex-direction: column; gap: 8px; }
+        .trade-row {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 1px 6px rgba(0,0,0,.07);
+            padding: 12px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .trade-info { display: flex; flex-direction: column; gap: 2px; }
+        .trade-name { font-size: .88rem; font-weight: 700; color: #1a1a1a; }
+        .trade-sub  { font-size: .75rem; color: #888; }
+        .trade-price { font-size: .95rem; font-weight: 800; color: #2e7d32; }
 
-        .action-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-        .action-btn-card { padding:16px 12px; border-radius:12px; border:1.5px solid #eee; background:#fff; cursor:pointer; text-align:center; transition:all .2s; text-decoration:none; display:block; }
-        .action-btn-card:hover { border-color:#be9682; background:#f5ede8; transform:translateY(-2px); }
-        .action-btn-card .icon { font-size:1.8rem; margin-bottom:6px; }
-        .action-btn-card .label { font-size:.85rem; font-weight:600; color:#333; }
-        .action-btn-card .desc { font-size:.75rem; color:#999; margin-top:2px; }
-
-        .logout-btn { margin-top:16px; width:100%; padding:11px; border:1.5px solid #eee; border-radius:10px; background:#fff; color:#999; font-size:.9rem; cursor:pointer; }
-        .logout-btn:hover { border-color:#f44336; color:#f44336; }
+        /* ── Empty state ── */
+        .empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 32px 20px;
+            color: #bbb;
+            font-size: .88rem;
+        }
+        .empty-state .icon { font-size: 2rem; margin-bottom: 8px; display: block; }
     </style>
 </head>
 <body>
 <div class="app">
-    <div class="hero">
-        <h1>🃏 Cardpool</h1>
-        <p>寶可夢卡片交易市場</p>
-    </div>
 
-    <!-- 未登入：顯示登入/註冊 -->
-    <div id="authSection">
-        <div class="auth-card">
-            <div class="auth-tabs">
-                <button class="auth-tab active" onclick="switchTab('login')">登入</button>
-                <button class="auth-tab" onclick="switchTab('register')">註冊</button>
+    <!-- 置頂 Header -->
+    <header class="site-header">
+        <a href="/" class="site-logo">🃏 Cardpool</a>
+        <div class="header-right">
+            <a href="/static/liff/login.html" class="btn-login" id="headerLoginBtn">登入 / 註冊</a>
+            <a href="/static/liff/settings.html" class="header-avatar" id="headerAvatar" style="display:none" title="個人設定">U</a>
+        </div>
+    </header>
+
+    <!-- 輪播 Banner -->
+    <div class="carousel" id="carousel"
+         aria-label="最新消息輪播">
+        <div class="carousel-track" id="carouselTrack">
+            <div class="carousel-slide slide-1">
+                <h2>🃏 Cardpool</h2>
+                <p>寶可夢卡牌交易市場<br>買賣 PSA 鑑定卡，安心有保障</p>
             </div>
-
-            <!-- 登入表單 -->
-            <div id="loginForm" class="auth-form">
-                <div class="field-group">
-                    <label>Email</label>
-                    <input type="email" id="loginEmail" placeholder="your@email.com" autocomplete="email">
-                </div>
-                <div class="field-group">
-                    <label>密碼</label>
-                    <input type="password" id="loginPassword" placeholder="至少 6 字元" autocomplete="current-password">
-                </div>
-                <button class="btn-primary" onclick="doLogin()">登入</button>
-                <div id="loginMsg" class="msg"></div>
+            <div class="carousel-slide slide-2">
+                <h2>📊 即時市場行情</h2>
+                <p>追蹤 PSA 10 成交價格<br>掌握每張卡的市場動態</p>
             </div>
-
-            <!-- 註冊表單 -->
-            <div id="registerForm" class="auth-form" style="display:none;">
-                <!-- Step 1 -->
-                <div id="registerStep1" style="display:block;">
-                    <div class="field-group">
-                        <label>暱稱（選填）</label>
-                        <input type="text" id="regName" placeholder="顯示名稱">
-                    </div>
-                    <div class="field-group">
-                        <label>Email</label>
-                        <input type="email" id="regEmail" placeholder="your@email.com" autocomplete="email">
-                    </div>
-                    <div class="field-group">
-                        <label>密碼</label>
-                        <input type="password" id="regPassword" placeholder="至少 6 字元" autocomplete="new-password">
-                    </div>
-                    <button class="btn-primary" onclick="doRegisterRequest()">寄送驗證碼</button>
-                    <div id="regMsg1" class="msg"></div>
-                </div>
-
-                <!-- Step 2 -->
-                <div id="registerStep2" class="verify-step">
-                    <div id="devCodeBox" class="dev-code-box" style="display:none;">
-                        ✅ 開發模式驗證碼：<strong id="devCode"></strong>
-                    </div>
-                    <div class="field-group">
-                        <label>驗證碼（6 位數）</label>
-                        <input type="text" id="regCode" placeholder="123456" maxlength="6" inputmode="numeric">
-                    </div>
-                    <button class="btn-primary" onclick="doRegisterVerify()">完成註冊</button>
-                    <button class="btn-primary" style="background:#f5f5f5;color:#666;margin-top:8px;" onclick="backToStep1()">← 返回修改</button>
-                    <div id="regMsg2" class="msg"></div>
-                </div>
+            <div class="carousel-slide slide-3">
+                <h2>📦 系列完整收錄</h2>
+                <p>朱紫、MEGA、SV 系列<br>超過 21,000 張卡牌資料</p>
+            </div>
+            <div class="carousel-slide slide-4">
+                <h2>✨ 安全媒合交易</h2>
+                <p>掛買、掛賣自動撮合<br>即時收到成交通知</p>
             </div>
         </div>
+
+        <div class="carousel-dots" id="carouselDots"></div>
+        <button class="carousel-arrow carousel-prev" id="carouselPrev" aria-label="上一張">‹</button>
+        <button class="carousel-arrow carousel-next" id="carouselNext" aria-label="下一張">›</button>
     </div>
 
-    <!-- 已登入：顯示用戶面板 -->
-    <div id="userSection" style="display:none;">
-        <div class="auth-card">
-            <div class="user-panel">
-                <div class="user-header">
-                    <div class="avatar" id="userAvatar">U</div>
-                    <div class="user-info">
-                        <h2 id="userName">用戶</h2>
-                        <p id="userEmail">-</p>
-                    </div>
-                </div>
-
-                <div class="action-grid">
-                    <a class="action-btn-card" href="/static/liff/sets.html">
-                        <div class="icon">📦</div>
-                        <div class="label">瀏覽系列</div>
-                        <div class="desc">搜尋卡片行情</div>
-                    </a>
-                    <a class="action-btn-card" href="/static/liff/listing.html">
-                        <div class="icon">📤</div>
-                        <div class="label">賣家上架</div>
-                        <div class="desc">設定價格與狀況</div>
-                    </a>
-                    <a class="action-btn-card" href="/static/liff/my-listings.html">
-                        <div class="icon">📋</div>
-                        <div class="label">我的上架</div>
-                        <div class="desc">管理掛單</div>
-                    </a>
-                    <a class="action-btn-card" href="/static/liff/test-search.html">
-                        <div class="icon">🔍</div>
-                        <div class="label">搜尋卡片</div>
-                        <div class="desc">查詢市場資訊</div>
-                    </a>
-                    <a class="action-btn-card" href="/static/liff/shop.html">
-                        <div class="icon">🏆</div>
-                        <div class="label">鑑定擴散框購買</div>
-                        <div class="desc">官方周邊商品</div>
-                    </a>
-                    <a class="action-btn-card" href="/static/liff/settings.html">
-                        <div class="icon">⚙️</div>
-                        <div class="label">設定</div>
-                        <div class="desc">個人資料與密碼</div>
-                    </a>
-                </div>
-
-                <button class="logout-btn" onclick="doLogout()">登出</button>
+    <!-- 最新上架 -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-title">最新上架</span>
+            <a href="/static/liff/sets.html" class="section-more">查看更多 ›</a>
+        </div>
+        <div class="listings-grid" id="listingsGrid">
+            <div class="empty-state">
+                <span class="icon">📭</span>
+                載入中⋯
             </div>
         </div>
-    </div>
+    </section>
+
+    <!-- 最新成交 -->
+    <section class="section" style="padding-top:0;">
+        <div class="section-header">
+            <span class="section-title">最新成交</span>
+        </div>
+        <div class="trades-list" id="tradesList">
+            <div class="empty-state">
+                <span class="icon">🔍</span>
+                載入中⋯
+            </div>
+        </div>
+    </section>
+
 </div>
 
 <script>
@@ -174,146 +301,137 @@ const API = (window.location.hostname === 'localhost' || window.location.hostnam
   ? `${window.location.protocol}//${window.location.hostname}:8000`
   : 'https://cardpool.onrender.com';
 
-function switchTab(tab) {
-    document.querySelectorAll('.auth-tab').forEach((el, i) => {
-        el.classList.toggle('active', (i === 0) === (tab === 'login'));
-    });
-    document.getElementById('loginForm').style.display = tab === 'login' ? '' : 'none';
-    document.getElementById('registerForm').style.display = tab === 'register' ? '' : 'none';
-}
+/* ── Carousel ── */
+(function() {
+    const track = document.getElementById('carouselTrack');
+    const dotsWrap = document.getElementById('carouselDots');
+    const slides = track.children;
+    const total = slides.length;
+    let cur = 0;
+    let timer;
 
-function showMsg(id, text, type) {
-    const el = document.getElementById(id);
-    el.className = 'msg ' + type;
-    el.textContent = text;
-}
-
-function getToken() { return localStorage.getItem('cp_token'); }
-function setToken(t) { localStorage.setItem('cp_token', t); }
-function clearToken() { localStorage.removeItem('cp_token'); }
-
-async function safeJson(r) {
-    try { return await r.json(); }
-    catch { return null; }
-}
-
-async function doLogin() {
-    const email = document.getElementById('loginEmail').value.trim();
-    const password = document.getElementById('loginPassword').value;
-    if (!email || !password) return showMsg('loginMsg', '請填寫 Email 和密碼', 'err');
-
-    try {
-        const r = await fetch(`${API}/api/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password })
-        });
-        const d = await safeJson(r);
-        if (!r.ok) return showMsg('loginMsg', d?.detail || '伺服器暫時無法連線，請稍後再試', 'err');
-        setToken(d.token);
-        showUser(d.user);
-    } catch (e) {
-        showMsg('loginMsg', '網路錯誤：' + e.message, 'err');
+    // build dots
+    for (let i = 0; i < total; i++) {
+        const d = document.createElement('button');
+        d.className = 'carousel-dot' + (i === 0 ? ' active' : '');
+        d.setAttribute('aria-label', `第 ${i+1} 張`);
+        d.addEventListener('click', () => goTo(i));
+        dotsWrap.appendChild(d);
     }
-}
 
-async function doRegisterRequest() {
-    const email = document.getElementById('regEmail').value.trim();
-    const password = document.getElementById('regPassword').value;
-    const display_name = document.getElementById('regName').value.trim();
-    if (!email || !password) return showMsg('regMsg1', '請填寫 Email 和密碼', 'err');
-
-    try {
-        const r = await fetch(`${API}/api/auth/register-request`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password, display_name })
-        });
-        const d = await safeJson(r);
-        if (!r.ok) return showMsg('regMsg1', d?.detail || '伺服器暫時無法連線，請稍後再試', 'err');
-
-        // 顯示 Step 2
-        document.getElementById('registerStep1').style.display = 'none';
-        document.getElementById('registerStep2').style.display = 'block';
-        showMsg('regMsg2', d.message || '驗證碼已寄出', 'ok');
-
-        if (d.dev_code) {
-            document.getElementById('devCode').textContent = d.dev_code;
-            document.getElementById('devCodeBox').style.display = '';
-        }
-    } catch (e) {
-        showMsg('regMsg1', '網路錯誤：' + e.message, 'err');
+    function goTo(n) {
+        cur = (n + total) % total;
+        track.style.transform = `translateX(-${cur * 100}%)`;
+        dotsWrap.querySelectorAll('.carousel-dot').forEach((d, i) =>
+            d.classList.toggle('active', i === cur));
+        resetTimer();
     }
-}
 
-async function doRegisterVerify() {
-    const email = document.getElementById('regEmail').value.trim();
-    const code = document.getElementById('regCode').value.trim();
-    if (!code) return showMsg('regMsg2', '請輸入驗證碼', 'err');
-
-    try {
-        const r = await fetch(`${API}/api/auth/register-verify`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, code })
-        });
-        const d = await safeJson(r);
-        if (!r.ok) return showMsg('regMsg2', d?.detail || '伺服器暫時無法連線，請稍後再試', 'err');
-        setToken(d.token);
-        showUser(d.user);
-    } catch (e) {
-        showMsg('regMsg2', '網路錯誤：' + e.message, 'err');
+    function resetTimer() {
+        clearInterval(timer);
+        timer = setInterval(() => goTo(cur + 1), 3200);
     }
-}
 
-function backToStep1() {
-    document.getElementById('registerStep1').style.display = 'block';
-    document.getElementById('registerStep2').style.display = 'none';
-}
+    document.getElementById('carouselPrev').addEventListener('click', () => goTo(cur - 1));
+    document.getElementById('carouselNext').addEventListener('click', () => goTo(cur + 1));
 
-function showUser(user) {
-    document.getElementById('authSection').style.display = 'none';
-    document.getElementById('userSection').style.display = '';
-    document.getElementById('userName').textContent = user.display_name || user.email;
-    document.getElementById('userEmail').textContent = user.email;
-    document.getElementById('userAvatar').textContent = (user.display_name || user.email || 'U')[0].toUpperCase();
-}
+    // touch swipe
+    let tx = 0;
+    const el = document.getElementById('carousel');
+    el.addEventListener('touchstart', e => { tx = e.touches[0].clientX; }, { passive: true });
+    el.addEventListener('touchend', e => {
+        const dx = e.changedTouches[0].clientX - tx;
+        if (Math.abs(dx) > 40) goTo(cur + (dx < 0 ? 1 : -1));
+    }, { passive: true });
 
-async function doLogout() {
-    const token = getToken();
-    if (token) {
-        await fetch(`${API}/api/auth/logout`, {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + token }
-        }).catch(() => {});
-    }
-    clearToken();
-    document.getElementById('authSection').style.display = '';
-    document.getElementById('userSection').style.display = 'none';
-}
+    resetTimer();
+})();
 
-// Auto-check session on load
-async function init() {
-    const token = getToken();
+/* ── Auth header ── */
+async function initHeader() {
+    const token = localStorage.getItem('cp_token');
     if (!token) return;
     try {
         const r = await fetch(`${API}/api/auth/me`, {
             headers: { 'Authorization': 'Bearer ' + token }
         });
-        if (r.ok) {
-            const d = await r.json();
-            showUser(d.user);
-        } else {
-            clearToken();
+        if (!r.ok) { localStorage.removeItem('cp_token'); return; }
+        const d = await r.json();
+        const u = d.user;
+        document.getElementById('headerLoginBtn').style.display = 'none';
+        const av = document.getElementById('headerAvatar');
+        av.style.display = 'flex';
+        av.textContent = (u.display_name || u.email || 'U')[0].toUpperCase();
+        av.title = u.display_name || u.email;
+    } catch {}
+}
+
+/* ── 最新上架 ── */
+async function loadListings() {
+    const grid = document.getElementById('listingsGrid');
+    try {
+        const r = await fetch(`${API}/api/listings?limit=6`);
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        const items = d.listings || [];
+        if (!items.length) {
+            grid.innerHTML = `<div class="empty-state"><span class="icon">📭</span>目前尚無上架商品</div>`;
+            return;
         }
-    } catch (e) {
-        clearToken();
+        grid.innerHTML = items.map(l => `
+            <div class="listing-card">
+                <span class="listing-badge">PSA ${l.grade || '-'}</span>
+                <div class="listing-name">${esc(l.set_id)} #${esc(l.card_number)}</div>
+                <div class="listing-sub">${fmtDate(l.created_at)}</div>
+                <div class="listing-price">NT$ ${Number(l.ask_price_twd).toLocaleString()}</div>
+            </div>
+        `).join('');
+    } catch {
+        grid.innerHTML = `<div class="empty-state"><span class="icon">📭</span>目前尚無上架商品</div>`;
     }
 }
 
-document.getElementById('loginPassword').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-document.getElementById('regCode').addEventListener('keydown', e => { if (e.key === 'Enter') doRegisterVerify(); });
-init();
+/* ── 最新成交 ── */
+async function loadTrades() {
+    const list = document.getElementById('tradesList');
+    try {
+        const r = await fetch(`${API}/api/trades/recent?limit=5`);
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        const items = d.trades || [];
+        if (!items.length) {
+            list.innerHTML = `<div class="empty-state"><span class="icon">🔍</span>目前尚無成交紀錄</div>`;
+            return;
+        }
+        list.innerHTML = items.map(t => `
+            <div class="trade-row">
+                <div class="trade-info">
+                    <div class="trade-name">${esc(t.set_id)} #${esc(t.card_number)} PSA${t.grade}</div>
+                    <div class="trade-sub">${fmtDate(t.created_at)}</div>
+                </div>
+                <div class="trade-price">NT$ ${Number(t.price_twd).toLocaleString()}</div>
+            </div>
+        `).join('');
+    } catch {
+        list.innerHTML = `<div class="empty-state"><span class="icon">🔍</span>目前尚無成交紀錄</div>`;
+    }
+}
+
+function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function fmtDate(s) {
+    if (!s) return '';
+    const d = new Date(s);
+    if (isNaN(d)) return '';
+    const mo = d.getMonth() + 1;
+    const da = d.getDate();
+    return `${mo}/${da}`;
+}
+
+initHeader();
+loadListings();
+loadTrades();
 </script>
 <script src="/static/liff/nav.js"></script>
 </body>
