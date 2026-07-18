@@ -90,7 +90,15 @@
             opacity: .9;
             text-shadow: 0 1px 3px rgba(0,0,0,.3);
         }
-        .slide-1 { background: linear-gradient(135deg, #be9682 0%, #7a4e3a 100%); }
+        .slide-1 {
+            background: url('/static/liff/banner1.jpg') center/cover no-repeat;
+        }
+        .slide-1::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,.25);
+        }
         .slide-2 { background: linear-gradient(135deg, #6b8e6e 0%, #3a5e3a 100%); }
         .slide-3 { background: linear-gradient(135deg, #7a82be 0%, #3a3e8a 100%); }
         .slide-4 { background: linear-gradient(135deg, #be9e60 0%, #7a5e20 100%); }
@@ -244,10 +252,7 @@
     <div class="carousel" id="carousel"
          aria-label="最新消息輪播">
         <div class="carousel-track" id="carouselTrack">
-            <div class="carousel-slide slide-1">
-                <h2>🃏 Cardpool</h2>
-                <p>寶可夢卡牌交易市場<br>買賣 PSA 鑑定卡，安心有保障</p>
-            </div>
+            <div class="carousel-slide slide-1"></div>
             <div class="carousel-slide slide-2">
                 <h2>📊 即時市場行情</h2>
                 <p>追蹤 PSA 10 成交價格<br>掌握每張卡的市場動態</p>
