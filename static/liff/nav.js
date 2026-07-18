@@ -68,8 +68,11 @@
     <a class="cp-nav-btn ${path === '/' || path.endsWith('index.html') ? 'active' : ''}" href="/">
       <span class="cp-nav-icon">🏠</span>首頁
     </a>
-    <a class="cp-nav-btn ${path.includes('settings') ? 'active' : ''}" href="/static/liff/settings.html">
-      <span class="cp-nav-icon">⚙️</span>設定
+    <a class="cp-nav-btn ${path.includes('search') ? 'active' : ''}" href="/static/liff/test-search.html">
+      <span class="cp-nav-icon">🔍</span>搜尋
+    </a>
+    <a class="cp-nav-btn ${path.includes('menu') ? 'active' : ''}" href="/static/liff/menu.html">
+      <span class="cp-nav-icon">☰</span>選單
     </a>
     <button class="cp-nav-btn" onclick="cpOpenModal('about')">
       <span class="cp-nav-icon">ℹ️</span>關於我們

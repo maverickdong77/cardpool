@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cardpool | 選單</title>
+    <link rel="stylesheet" href="/static/liff/style.css?v=2">
+    <style>
+        .user-panel { padding: 20px; }
+        .user-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+            background: #fff;
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 1px 8px rgba(0,0,0,.07);
+        }
+        .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: #be9682;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #1a1a1a;
+            flex-shrink: 0;
+        }
+        .user-info h2 { font-size: 1.05rem; font-weight: 700; }
+        .user-info p  { font-size: .8rem; color: #888; margin-top: 2px; }
+
+        .action-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .action-btn-card {
+            padding: 18px 12px;
+            border-radius: 14px;
+            border: 1.5px solid #eee;
+            background: #fff;
+            cursor: pointer;
+            text-align: center;
+            transition: all .2s;
+            text-decoration: none;
+            display: block;
+            box-shadow: 0 1px 6px rgba(0,0,0,.05);
+        }
+        .action-btn-card:hover { border-color: #be9682; background: #f5ede8; transform: translateY(-2px); }
+        .action-btn-card .icon  { font-size: 1.8rem; margin-bottom: 7px; }
+        .action-btn-card .label { font-size: .85rem; font-weight: 700; color: #333; }
+        .action-btn-card .desc  { font-size: .75rem; color: #999; margin-top: 2px; }
+
+        .logout-btn {
+            margin-top: 20px;
+            width: 100%;
+            padding: 12px;
+            border: 1.5px solid #eee;
+            border-radius: 12px;
+            background: #fff;
+            color: #999;
+            font-size: .9rem;
+            cursor: pointer;
+            transition: all .2s;
+        }
+        .logout-btn:hover { border-color: #f44336; color: #f44336; }
+
+        /* 未登入 */
+        .login-prompt {
+            text-align: center;
+            padding: 60px 20px 40px;
+        }
+        .login-prompt .icon { font-size: 3rem; margin-bottom: 12px; display: block; }
+        .login-prompt p { font-size: .95rem; color: #666; margin-bottom: 20px; }
+        .btn-goto-login {
+            display: inline-block;
+            padding: 12px 32px;
+            background: #be9682;
+            border-radius: 24px;
+            font-size: .95rem;
+            font-weight: 700;
+            color: #1a1a1a;
+            text-decoration: none;
+            transition: opacity .2s;
+        }
+        .btn-goto-login:hover { opacity: .85; }
+    </style>
+</head>
+<body>
+<div class="app">
+
+    <!-- 已登入 -->
+    <div id="loggedIn" style="display:none;">
+        <div class="user-panel">
+            <div class="user-header">
+                <div class="avatar" id="userAvatar">U</div>
+                <div class="user-info">
+                    <h2 id="userName">用戶</h2>
+                    <p id="userEmail">-</p>
+                </div>
+            </div>
+
+            <div class="action-grid">
+                <a class="action-btn-card" href="/static/liff/sets.html">
+                    <div class="icon">📦</div>
+                    <div class="label">瀏覽系列</div>
+                    <div class="desc">搜尋卡片行情</div>
+                </a>
+                <a class="action-btn-card" href="/static/liff/listing.html">
+                    <div class="icon">📤</div>
+                    <div class="label">賣家上架</div>
+                    <div class="desc">設定價格與狀況</div>
+                </a>
+                <a class="action-btn-card" href="/static/liff/my-listings.html">
+                    <div class="icon">📋</div>
+                    <div class="label">我的上架</div>
+                    <div class="desc">管理掛單</div>
+                </a>
+                <a class="action-btn-card" href="/static/liff/test-search.html">
+                    <div class="icon">🔍</div>
+                    <div class="label">搜尋卡片</div>
+                    <div class="desc">查詢市場資訊</div>
+                </a>
+                <a class="action-btn-card" href="/static/liff/shop.html">
+                    <div class="icon">🏆</div>
+                    <div class="label">購買擴散框</div>
+                    <div class="desc">官方周邊商品</div>
+                </a>
+                <a class="action-btn-card" href="/static/liff/settings.html">
+                    <div class="icon">⚙️</div>
+                    <div class="label">設定</div>
+                    <div class="desc">個人資料與密碼</div>
+                </a>
+            </div>
+
+            <button class="logout-btn" onclick="doLogout()">登出</button>
+        </div>
+    </div>
+
+    <!-- 未登入 -->
+    <div id="notLoggedIn" style="display:none;">
+        <div class="login-prompt">
+            <span class="icon">🔐</span>
+            <p>請先登入才能使用完整功能</p>
+            <a href="/static/liff/login.html" class="btn-goto-login">前往登入 / 註冊</a>
+        </div>
+    </div>
+
+</div>
+
+<script>
+const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `${window.location.protocol}//${window.location.hostname}:8000`
+  : 'https://cardpool.onrender.com';
+
+async function init() {
+    const token = localStorage.getItem('cp_token');
+    if (!token) {
+        document.getElementById('notLoggedIn').style.display = '';
+        return;
+    }
+    try {
+        const r = await fetch(`${API}/api/auth/me`, {
+            headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if (!r.ok) {
+            localStorage.removeItem('cp_token');
+            document.getElementById('notLoggedIn').style.display = '';
+            return;
+        }
+        const d = await r.json();
+        const u = d.user;
+        document.getElementById('loggedIn').style.display = '';
+        document.getElementById('userName').textContent  = u.display_name || u.email;
+        document.getElementById('userEmail').textContent = u.email;
+        document.getElementById('userAvatar').textContent = (u.display_name || u.email || 'U')[0].toUpperCase();
+    } catch {
+        document.getElementById('notLoggedIn').style.display = '';
+    }
+}
+
+async function doLogout() {
+    const token = localStorage.getItem('cp_token');
+    if (token) {
+        await fetch(`${API}/api/auth/logout`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token }
+        }).catch(() => {});
+    }
+    localStorage.removeItem('cp_token');
+    window.location.href = '/static/liff/login.html';
+}
+
+init();
+</script>
+<script src="/static/liff/nav.js"></script>
+</body>
+</html>
