@@ -9,6 +9,7 @@ aiosqlite
 asyncpg
 apscheduler
 playwright
+playwright-stealth
 psutil
 sendgrid
 python-multipart
