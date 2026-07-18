@@ -357,8 +357,11 @@ async def lifespan(app: FastAPI):
     hot_job = job_ctrl.register("hot-sets", "熱門 set 每 6h 高頻刷新", factory=_hot_sets_loop)
 
     # 手動觸發的 backfill job（不會自動啟動，user 從 /admin/jobs 點 start）
-    from app.jobs.backfill_prices import backfill_loop as _backfill_loop
-    job_ctrl.register("backfill-prices", "缺價卡片 backfill (手動)", factory=_backfill_loop)
+    try:
+        from app.jobs.backfill_prices import backfill_loop as _backfill_loop
+        job_ctrl.register("backfill-prices", "缺價卡片 backfill (手動)", factory=_backfill_loop)
+    except ImportError:
+        pass
 
     if disable_jobs:
         print("[Cardpool] CARDPOOL_DISABLE_JOBS=1 → 排程 job 不啟動（純 API 模式）")
