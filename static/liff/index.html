@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cardpool | 首頁</title>
-    <link rel="stylesheet" href="/static/liff/style.css">
+    <link rel="stylesheet" href="/static/liff/style.css?v=2">
     <style>
         .hero { background: linear-gradient(135deg,#be9682 0%,#a07060 100%); padding:28px 20px 20px; text-align:center; }
         .hero h1 { font-size:1.8rem; font-weight:800; color:#1a1a1a; letter-spacing:1px; }
@@ -170,7 +170,9 @@
 </div>
 
 <script>
-const API = window.location.origin;
+const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `${window.location.protocol}//${window.location.hostname}:8000`
+  : 'https://cardpool.onrender.com';
 
 function switchTab(tab) {
     document.querySelectorAll('.auth-tab').forEach((el, i) => {

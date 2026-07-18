@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cardpool | 系列列表</title>
-    <link rel="stylesheet" href="/static/liff/style.css">
+    <link rel="stylesheet" href="/static/liff/style.css?v=2">
     <style>
         .tabs-container {
             display: flex;
             gap: 8px;
             padding: 12px;
-            background: #faf7f3;
+            background: #fff;
             position: sticky;
             top: 0;
             z-index: 10;
@@ -118,7 +118,9 @@
     </div>
 
     <script>
-        const API_BASE = window.location.origin;
+        const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `${window.location.protocol}//${window.location.hostname}:8000`
+  : 'https://cardpool.onrender.com';
         let currentLang = 'jp';
 
         // 初始化

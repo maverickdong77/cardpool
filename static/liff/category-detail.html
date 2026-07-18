@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cardpool | 分類詳情</title>
-    <link rel="stylesheet" href="/static/liff/style.css">
+    <link rel="stylesheet" href="/static/liff/style.css?v=2">
     <style>
         body { background: #f6f7f9; }
         .header {
@@ -48,12 +48,15 @@
     <div id="status" class="loading">讀取中...</div>
 
 <script>
+const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `${window.location.protocol}//${window.location.hostname}:8000`
+  : 'https://cardpool.onrender.com';
 const m = location.pathname.match(/^\/category\/(pokemon|character)\/(\d+)/);
 if (!m) { document.body.innerHTML = '<p style="padding:24px">URL 不正確</p>'; }
 
 const kind = m[1];
 const id = m[2];
-const apiUrl = `/api/category/${kind}/${id}/cards`;
+const apiUrl = `${API}/api/category/${kind}/${id}/cards`;
 
 async function load() {
     const res = await fetch(apiUrl);

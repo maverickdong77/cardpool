@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cardpool | 訓練家分類</title>
-    <link rel="stylesheet" href="/static/liff/style.css">
+    <link rel="stylesheet" href="/static/liff/style.css?v=2">
     <style>
         body { background: #f6f7f9; }
         .header {
@@ -65,10 +65,13 @@
     <div id="empty" class="empty" style="display:none">沒有符合的結果</div>
 
 <script>
+const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `${window.location.protocol}//${window.location.hostname}:8000`
+  : 'https://cardpool.onrender.com';
 let allItems = [];
 
 async function load() {
-    const res = await fetch('/api/category/character/list');
+    const res = await fetch(`${API}/api/category/character/list`);
     allItems = await res.json();
     document.getElementById('count').textContent = `共 ${allItems.length} 位`;
     render(allItems);

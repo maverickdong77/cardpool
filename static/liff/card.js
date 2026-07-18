@@ -1,6 +1,8 @@
-// Card Detail Page
+﻿// Card Detail Page
 
-const API_BASE = window.location.origin;
+const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `${window.location.protocol}//${window.location.hostname}:8000`
+  : 'https://cardpool.onrender.com';
 const LIFF_ID = '2009794241-FASgMi67';
 
 let cardData = null;

@@ -1,6 +1,8 @@
-// Cardpool 查價機器人
+﻿// Cardpool 查價機器人
 
-const API_BASE = window.location.origin;
+const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `${window.location.protocol}//${window.location.hostname}:8000`
+  : 'https://cardpool.onrender.com';
 let selectedCard = null;
 let currentMode = 'search';
 let currentSetId = null;

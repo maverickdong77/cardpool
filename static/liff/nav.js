@@ -9,7 +9,7 @@
     .cp-nav {
       position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
       width: 100%; max-width: 500px;
-      background: #faf7f3;
+      background: #f0e8c8;
       border-top: 1px solid #eee;
       display: flex;
       box-shadow: 0 -4px 16px rgba(0,0,0,.07);

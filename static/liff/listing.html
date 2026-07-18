@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cardpool | 賣家上架</title>
-    <link rel="stylesheet" href="/static/liff/style.css">
+    <link rel="stylesheet" href="/static/liff/style.css?v=2">
     <style>
         .page-header { background:linear-gradient(135deg,#be9682 0%,#a07060 100%); padding:20px; display:flex; align-items:center; gap:12px; }
         .back-btn { background:rgba(0,0,0,.1); border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:.85rem; color:#333; font-weight:600; text-decoration:none; }
@@ -150,7 +150,9 @@
 </div>
 
 <script>
-const API = window.location.origin;
+const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `${window.location.protocol}//${window.location.hostname}:8000`
+  : 'https://cardpool.onrender.com';
 let selectedCard = null;
 let selectedCondition = null;
 
